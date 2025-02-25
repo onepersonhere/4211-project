@@ -1,8 +1,13 @@
 import json
 import requests
-import csv
 import ssl
+import pandas as pd
+import numpy as np
+import datetime as dt
 from transformers import pipeline
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # ----- SSL Bypass (if needed) -----
 try:
@@ -23,7 +28,7 @@ def load_api_key():
                 raise ValueError("news_api_key not found in secrets.json")
             return api_key
     except Exception as e:
-        print("Error loading API key from secrets.json:", e)
+        print("Error loading API key:", e)
         exit(1)
 
 
@@ -31,13 +36,8 @@ NEWS_API_KEY = load_api_key()
 NEWS_API_URL = 'https://newsapi.org/v2/everything'
 
 
-# ----- Function to Fetch News Articles for a Given Ticker -----
-def get_news(ticker, page_size=20):
-    """
-    Fetch news articles related to the given ticker.
-    The ticker is enclosed in quotes to ensure an exact match.
-    """
-    query = f'"{ticker}"'
+# ----- Function to fetch news using a given query -----
+def get_news(query, page_size=20):
     params = {
         'q': query,
         'language': 'en',
@@ -50,8 +50,23 @@ def get_news(ticker, page_size=20):
         data = response.json()
         return data.get('articles', [])
     else:
-        print(f"Error fetching news for {ticker}: {response.status_code}")
+        print(f"Error fetching news for query {query}: {response.status_code}")
         return []
+
+
+# ----- Combine news from multiple queries for a given ticker -----
+def get_news_combined(ticker):
+    # Query 1: just the ticker (in quotes for exact match)
+    query1 = f'"{ticker}"'
+    articles1 = get_news(query1, page_size=20)
+
+    # Query 2: ticker with financial terms to capture finance-focused articles
+    query2 = f'"{ticker}" AND ("financial" OR "market" OR "stock" OR "crypto")'
+    articles2 = get_news(query2, page_size=20)
+
+    # Deduplicate based on URL
+    combined = {article['url']: article for article in articles1 + articles2}.values()
+    return list(combined)
 
 
 # ----- Initialize FinBERT Sentiment Pipeline -----
@@ -59,27 +74,40 @@ def get_news(ticker, page_size=20):
 sentiment_pipeline = pipeline(
     "sentiment-analysis",
     model="yiyanghkust/finbert-tone",
-    tokenizer="yiyanghkust/finbert-tone",
-    framework="pt"  # Force PyTorch usage
+    tokenizer="yiyanghkust/finbert-tone"
 )
 
 
-
 def analyze_sentiment(text):
-    """
-    Uses FinBERT to perform sentiment analysis on the input text.
-    Returns a dictionary with:
-      - label: one of 'POSITIVE', 'NEGATIVE', or 'NEUTRAL'
-      - score: the model's confidence
-      - compound: a numeric score (+score for POSITIVE, -score for NEGATIVE, 0 for NEUTRAL)
-    """
+    """Analyze sentiment using FinBERT and convert output to a numeric compound score."""
     result = sentiment_pipeline(text)[0]
     label = result['label']
     score = result['score']
-    # Assign a numeric compound score:
-    compound = score if label.upper() == 'POSITIVE' else -score if label.upper() == 'NEGATIVE' else 0
-    # Return all values in a unified dictionary.
+    # Define a compound score: POSITIVE => +score, NEGATIVE => -score, NEUTRAL => 0.
+    compound = score if label.upper() == "POSITIVE" else -score if label.upper() == "NEGATIVE" else 0
     return {"label": label.upper(), "score": score, "compound": compound}
+
+
+# ----- Aggregate article sentiment on a daily basis -----
+def aggregate_daily_sentiment(articles):
+    records = []
+    for article in articles:
+        pub_date = article.get('publishedAt', None)
+        if pub_date:
+            # Convert ISO date to Python date (ignoring time)
+            date_obj = dt.datetime.fromisoformat(pub_date.replace("Z", "+00:00")).date()
+            title = article.get('title', '')
+            description = article.get('description', '')
+            text = f"{title}. {description}"
+            sentiment = analyze_sentiment(text)
+            records.append({"date": date_obj, "compound": sentiment["compound"]})
+    if records:
+        df = pd.DataFrame(records)
+        # Compute average compound sentiment for each day
+        daily_sentiment = df.groupby("date")["compound"].mean().reset_index()
+        return daily_sentiment
+    else:
+        return pd.DataFrame(columns=["date", "compound"])
 
 
 # ----- Main Function -----
@@ -95,80 +123,106 @@ def main():
         return
 
     if not tickers:
-        print("No tickers found in the JSON file.")
+        print("No tickers found.")
         return
 
-    # Lists to collect detailed article results and summary per ticker.
-    results = []
-    summary = {}
+    # Dictionaries to store daily sentiment per ticker and detailed article results.
+    ticker_sentiments = {}
+    detailed_results = []
 
     for ticker in tickers:
         print(f"\nProcessing ticker: {ticker}")
-        articles = get_news(ticker)
+        articles = get_news_combined(ticker)
+        print(f"Found {len(articles)} articles for {ticker}.")
         if not articles:
-            print(f"No articles found for {ticker}.")
             continue
 
-        # Initialize summary statistics for this ticker.
-        summary[ticker] = {"count": 0, "total_compound": 0}
+        # Aggregate daily sentiment for this ticker.
+        daily_df = aggregate_daily_sentiment(articles)
+        if daily_df.empty:
+            print(f"No valid publication dates found for {ticker}.")
+            continue
+        ticker_sentiments[ticker] = daily_df.set_index("date")
 
+        # Save detailed sentiment result for each article.
         for article in articles:
-            title = article.get('title', 'No title')
+            pub_date = article.get('publishedAt', '')
+            try:
+                date_obj = dt.datetime.fromisoformat(pub_date.replace("Z", "+00:00")).date()
+            except Exception:
+                date_obj = None
+            title = article.get('title', '')
             description = article.get('description', '')
-            published_at = article.get('publishedAt', '')
-            url = article.get('url', '')
-            # Combine title and description for analysis.
             text = f"{title}. {description}"
             sentiment = analyze_sentiment(text)
-
-            # Update summary.
-            summary[ticker]["count"] += 1
-            summary[ticker]["total_compound"] += sentiment["compound"]
-
-            # Append detailed result.
-            results.append({
+            detailed_results.append({
                 "ticker": ticker,
+                "date": date_obj,
                 "title": title,
-                "description": description,
-                "publishedAt": published_at,
-                "url": url,
-                "sentiment_label": sentiment["label"],
-                "sentiment_score": sentiment["score"],
-                "sentiment_compound": sentiment["compound"]
+                "compound": sentiment["compound"],
+                "label": sentiment["label"],
+                "score": sentiment["score"],
+                "url": article.get("url", "")
             })
 
-            print("Title:", title)
-            print("FinBERT Output:", sentiment)
-            print("-" * 60)
+    # Combine aggregated daily sentiment data across tickers.
+    if ticker_sentiments:
+        # Build a complete date range across all tickers.
+        all_dates = pd.concat([df for df in ticker_sentiments.values()]).index.unique()
+        start_date = min(all_dates)
+        end_date = max(all_dates)
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        sentiment_df = pd.DataFrame(index=date_range)
+        for ticker, df in ticker_sentiments.items():
+            df = df.reindex(date_range)
+            sentiment_df[ticker] = df["compound"]
+        # Forward-fill missing values; if still missing, fill with 0.
+        sentiment_df.fillna(method="ffill", inplace=True)
+        sentiment_df.fillna(0, inplace=True)
+        sentiment_df.to_csv("aggregated_daily_sentiment.csv")
+        print("\nAggregated daily sentiment saved to aggregated_daily_sentiment.csv")
 
-    # Write detailed results to CSV.
-    if results:
-        fieldnames = [
-            "ticker", "title", "description", "publishedAt", "url",
-            "sentiment_label", "sentiment_score", "sentiment_compound"
-        ]
-        csv_filename = "sentiment_results.csv"
-        with open(csv_filename, mode='w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(results)
-        print(f"\nDetailed sentiment analysis results saved to {csv_filename}")
+        # --- Correlation Analysis ---
+        corr_matrix = sentiment_df.corr()
+        print("\nCorrelation Matrix between tickers' daily sentiment scores:")
+        print(corr_matrix)
+
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(corr_matrix, annot=True, cmap="coolwarm")
+        plt.title("Correlation Matrix of Daily Sentiment Scores")
+        plt.savefig("correlation_heatmap.png")
+        plt.show()
+
+        # --- PCA Analysis ---
+        pca_data = sentiment_df.dropna().values
+        n_components = min(len(tickers), pca_data.shape[1])
+        pca = PCA(n_components=n_components)
+        principal_components = pca.fit_transform(pca_data)
+        explained_var = pca.explained_variance_ratio_
+        print("\nPCA Explained Variance Ratios:")
+        for i, ratio in enumerate(explained_var):
+            print(f"Component {i + 1}: {ratio:.4f}")
+
+        # Scatter plot of first two principal components (if available)
+        if pca_data.shape[0] > 1 and principal_components.shape[1] >= 2:
+            plt.figure(figsize=(8, 6))
+            plt.scatter(principal_components[:, 0], principal_components[:, 1])
+            plt.xlabel("Principal Component 1")
+            plt.ylabel("Principal Component 2")
+            plt.title("PCA of Daily Sentiment Scores")
+            plt.savefig("pca_scatter.png")
+            plt.show()
     else:
-        print("No detailed results to write to CSV.")
+        print("No aggregated sentiment data available.")
 
-    # Print sentiment summary per ticker.
-    print("\nSentiment Summary per Ticker:")
-    for ticker, stats in summary.items():
-        count = stats["count"]
-        if count > 0:
-            avg_compound = stats["total_compound"] / count
-            print(f"\nTicker: {ticker}")
-            print(f"  Articles Processed: {count}")
-            print(f"  Average Compound Score: {avg_compound:.4f}")
-        else:
-            print(f"\nTicker: {ticker} - No articles processed.")
+    # Write detailed article-level sentiment results to CSV.
+    if detailed_results:
+        detailed_df = pd.DataFrame(detailed_results)
+        detailed_df.to_csv("detailed_sentiment_results.csv", index=False)
+        print("Detailed sentiment results saved to detailed_sentiment_results.csv")
+    else:
+        print("No detailed sentiment results to save.")
 
 
-# ----- Run the Script -----
 if __name__ == "__main__":
     main()
