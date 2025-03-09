@@ -54,8 +54,8 @@ def calculate_macd_rsi_and_save(input_folder, output_folder, macd_fast=12, macd_
             print(f"Error processing {file_path}: {e}")
 
 # Set folder paths
-input_folder = "./market_data"
-output_folder = "./processed_data"
+input_folder = "market_data/"
+output_folder = "processed_data/"
 
 # Run function
 calculate_macd_rsi_and_save(input_folder, output_folder)

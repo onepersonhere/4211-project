@@ -8,7 +8,7 @@ def to_milliseconds(date_str):
 
 # Define timeframe
 start_time = to_milliseconds("2025-01-01 00:00:00")  # Start date
-end_time = to_milliseconds("2025-02-26 00:00:00")    # End date
+end_time = to_milliseconds("2025-03-01 00:00:00")    # End date
 
 # Binance API URL
 url = "https://api.binance.com/api/v3/klines"
@@ -66,7 +66,9 @@ for coin in coins:
     # Keep only relevant columns
     df = df[["Open Time", "Open", "High", "Low", "Close", "Volume", "Number of Trades", "Coin"]]
     
+    output_dir = "market_data"
+    os.makedirs(output_dir, exist_ok=True)
     # Save to CSV file in market_data folder
-    filename = os.path.join("market_data", f"{coin[:-4]}_1m_data.csv")
+    filename = os.path.join(output_dir, f"{coin[:-4]}_1m_data.csv")
     df.to_csv(filename, index=False)
     print(f"Saved {coin} data to {filename}")
