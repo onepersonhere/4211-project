@@ -10,7 +10,7 @@ def calculate_macd_rsi_and_save(input_folder, output_folder, macd_fast=12, macd_
     file_paths = [os.path.join(input_folder, f) for f in os.listdir(input_folder) if f.endswith('.csv')]
 
     for file_path in file_paths:
-        try:
+        
             df = pd.read_csv(file_path)
 
             # Ensure 'Close' column exists
@@ -37,6 +37,48 @@ def calculate_macd_rsi_and_save(input_folder, output_folder, macd_fast=12, macd_
             # Recalculate MACD_Hist after filling NaNs
             df["MACD_Hist"] = df["MACD"] - df["MACD_Signal"]
 
+            # Add KDJ 
+            # Calculate %K and %D using TA-Lib's STOCH function
+            slowk, slowd = talib.STOCH(df['High'], df['Low'], df['Close'], fastk_period=7, slowk_period=3, slowd_period=3)
+
+            # Calculate the %J line manually
+            slowj = 3 * slowk - 2 * slowd
+
+            # Add the K, D, and J lines to the dfframe
+            df['%K'] = slowk
+            df['%D'] = slowd
+            df['%J'] = slowj
+
+            # Add BOLL
+            upper_band, middle_band, lower_band = talib.BBANDS(df['Close'], timeperiod=14, nbdevup=2, nbdevdn=2, matype=0)
+
+            # Add the bands to the dfFrame for visualization
+            df['Upper_Band'] = upper_band
+            df['Middle_Band'] = middle_band
+            df['Lower_Band'] = lower_band
+
+            # Add ADX
+            high_prices = df['High'].values
+            low_prices = df['Low'].values
+            close_prices = df['Close'].values
+
+            # Calculate ADX with a typical period of 14 (can be adjusted)
+            df['ADX'] = talib.ADX(high_prices, low_prices, close_prices, timeperiod=14)
+            df['+DI'] = talib.PLUS_DI(high_prices, low_prices, close_prices, timeperiod=14)
+            df['-DI'] = talib.MINUS_DI(high_prices, low_prices, close_prices, timeperiod=14)
+            # ADX is the main line that measures trend strength
+            # +DI and -DI are the directional indicators
+
+            # You can add these values to the dfframe or use them directly for analysis
+            
+
+            # Aroon 
+            # Calculate Aroon with a typical period of 14 (can be adjusted)
+            aroon_up, aroon_down = talib.AROON(high_prices, low_prices, timeperiod=14)
+
+            # Aroon Up and Aroon Down values
+            df['Aroon Up'] = aroon_up
+            df['Aroon Down'] = aroon_down
             # Fix RSI missing values:
             # 1. Replace first 14 NaNs with SMA of Close Price for the first 14 periods
             # We use the very first Close price for the first RSI entry
@@ -54,9 +96,7 @@ def calculate_macd_rsi_and_save(input_folder, output_folder, macd_fast=12, macd_
             df.to_csv(output_file, index=False)
             print(f"Saved: {output_file}")
 
-        except Exception as e:
-            print(f"Error processing {file_path}: {e}")
-
+        
 # Set folder paths
 input_folder = "market_data/"
 output_folder = "processed_data/"
