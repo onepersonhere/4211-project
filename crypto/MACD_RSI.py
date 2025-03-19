@@ -17,7 +17,11 @@ def calculate_macd_rsi_and_save(input_folder, output_folder, macd_fast=12, macd_
             if "Close" not in df.columns:
                 print(f"Skipping {file_path}: 'Close' column not found")
                 continue
+            # Compute 9-Period EMA
+            df["EMA_9"] = talib.EMA(df["Close"], timeperiod=9)
 
+            # Compute 21-Period EMA
+            df["EMA_21"] = talib.EMA(df["Close"], timeperiod=21)
             # Compute MACD
             df["MACD"], df["MACD_Signal"], df["MACD_Hist"] = talib.MACD(
                 df["Close"], fastperiod=macd_fast, slowperiod=macd_slow, signalperiod=macd_signal
