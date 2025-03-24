@@ -2,16 +2,21 @@ import requests
 import time
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+
 import shutil
 
 def to_milliseconds(date_str):
-    return int(time.mktime(time.strptime(date_str, "%Y-%m-%d %H:%M:%S"))) * 1000
+    dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)  # Convert to milliseconds
 
-# Define timeframe
-start_time = to_milliseconds("2025-01-01 00:00:00")  # Start date
-today_str = datetime.now().strftime("%Y-%m-%d 00:00:00")
-end_time = to_milliseconds(today_str)    # End date, default is today
+# Set time to UTC explicitly
+start_time_utc = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+end_time_utc = datetime(2025, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+# Convert to milliseconds, replacing with UTC timezone
+start_time = to_milliseconds(start_time_utc.strftime("%Y-%m-%d %H:%M:%S"))
+end_time = to_milliseconds(end_time_utc.strftime("%Y-%m-%d %H:%M:%S"))
 
 # Binance API URL
 url = "https://api.binance.com/api/v3/klines"

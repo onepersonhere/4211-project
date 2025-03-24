@@ -4,6 +4,8 @@
 
 # Ignore all CSV files 
 copy/data_with_indicators/*.csv
-copy/data_raw/
+
 copy/data_raw.zip
+
+copy/data_raw/
 
