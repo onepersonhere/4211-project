@@ -1,3 +1,6 @@
 .env
 
-onchain_data.ipynb
+copy/data_with_indicators/*.csv
+copy/data_raw/
+copy/data_raw.zip
+

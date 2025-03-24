@@ -3,6 +3,7 @@ import time
 import pandas as pd
 import os
 from datetime import datetime
+import shutil
 
 def to_milliseconds(date_str):
     return int(time.mktime(time.strptime(date_str, "%Y-%m-%d %H:%M:%S"))) * 1000
@@ -23,7 +24,7 @@ coins = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"]
 max_limit = 1000
 
 # Get various intervals
-intervals = ['1m', '5m', '15m','30m', '1h']
+intervals = ['1m', '5m','30m', '1h']
 def get_binance_data(interval, coins=coins, url=url, start_time=start_time, end_time=end_time, max_limit=1000):
     all_coins_data =[] # to concat multiple dfs
     # Iterate over each coin
@@ -73,18 +74,28 @@ def get_binance_data(interval, coins=coins, url=url, start_time=start_time, end_
         all_coins_data.append(df)
     return all_coins_data
 
+# Get the directory where the script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Get various intervals
-intervals = ['1m', '5m', '15m','30m', '1h']
+# Define the output directory at the script's location
+output_dir = os.path.join(script_dir, "data_raw")
+os.makedirs(output_dir, exist_ok=True)  # Create the folder if it doesn't exist
+
 # Get data for each interval
 for interval in intervals:
     interval_data = get_binance_data(interval)
     interval_combined = pd.concat(interval_data, ignore_index=True)
     interval_combined = interval_combined.rename(columns={"Open Time": "Date"})
-
-    output_dir = "data_raw"
-    os.makedirs(output_dir, exist_ok=True)
+    
     filename = os.path.join(output_dir, f"crypto_prices_{interval}.csv")
     interval_combined.to_csv(filename, index=False)
     print(f"Saved data to {filename}")
+
+# Define the directory containing the CSVs (now "data_raw")
+directory = os.path.join(script_dir, "data_raw")
+
+# After saving all CSVs, zip the folder
+zip_filename = os.path.join(script_dir, "data_raw")
+shutil.make_archive(zip_filename, 'zip', directory)
+print(f"Zipped data to {zip_filename}.zip")
 

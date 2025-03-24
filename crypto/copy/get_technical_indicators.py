@@ -1,10 +1,14 @@
 import pandas as pd
 import numpy as np
 import os
+import shutil
+import zipfile
 
 # Function to process the stock data and calculate the indicators
-def process_crypto_data(file_name):
-    combined_df = pd.read_csv(f'./data_raw/{file_name}.csv')
+def process_crypto_data(script_dir, file_name):
+
+    raw_folder = os.path.join(script_dir, "data_raw")
+    combined_df = pd.read_csv(os.path.join(raw_folder, f'{file_name}.csv'))
 
     # If a Date column exists, parse it as datetime and sort by time
     combined_df['Date'] = pd.to_datetime(combined_df['Date'])
@@ -107,20 +111,62 @@ def process_crypto_data(file_name):
     
     new_combined_df = pd.concat(new_combined_df_lst, ignore_index=True)
 
-    output_file_path = f'./data_with_indicators/{file_name}_with_indicators.csv'
-    os.makedirs(os.path.dirname(output_file_path), exist_ok=True)
-    new_combined_df.to_csv(output_file_path, index=False)
-    print(f"Processed data saved to {output_file_path}")
+    output_dir = os.path.join(script_dir, "data_with_indicators")
+    # Ensure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    output_file_path = os.path.join(output_dir, f'{file_name}_with_indicators.zip')
+    # Save data directly into a ZIP file without creating an extra CSV file
+    with zipfile.ZipFile(output_file_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        csv_data = new_combined_df.to_csv(index=False).encode('utf-8')
+        zipf.writestr(f'{file_name}_with_indicators.csv', csv_data)
+
+    print(f"Processed data saved as ZIP: {output_file_path}")
+
+
+
+# Function to zip each cryptocurrency's data separately
+def zip_and_split_crypto_files(output_dir):
+    for file_name in os.listdir(output_dir):
+        if file_name.endswith('.csv'):
+            crypto_file_path = os.path.join(output_dir, file_name)
+            zip_file_path = os.path.join(output_dir, file_name.replace('.csv', '.zip'))
+            
+            # Create a ZIP file for each crypto CSV
+            shutil.make_archive(zip_file_path[:-4], 'zip', output_dir, file_name)
 
 # Process all CSV files in the /data_raw directory
 def process_all_files():
-    process_crypto_data('crypto_prices_1m')
-    '''
-    input_dir = './data_raw'
+    #Get script directory
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+
+    # Unzip folders if not unzipped already
+    # Define the path to the zip file and the destination folder
+    zip_file = os.path.join(script_dir, 'data_raw.zip')
+    
+    extract_to = os.path.join(script_dir, 'data_raw')
+    # Ensure the extraction directory exists
+    os.makedirs(extract_to, exist_ok=True)
+
+    # Ensure extraction only happens if the folder is missing or empty
+    if not os.path.exists(extract_to) or not os.listdir(extract_to):  
+        shutil.unpack_archive(zip_file, extract_to)
+        print(f"Unzipped to: {extract_to}")
+    else:
+        print("Skipping Extraction...")
+    
+    input_dir = os.path.join(script_dir, "data_raw")
+
     for file_name in os.listdir(input_dir):
         if file_name.endswith('.csv'):
-            process_stock_data(file_name.replace('.csv', ''))
-    '''
+            process_crypto_data(script_dir, file_name.replace('.csv', ''))
+
+    
+    # Define the directory containing the modified CSVs (now "data_with_indicators")
+    directory = os.path.join(script_dir, "data_with_indicators")
+
+    # After saving all CSVs, zip every csv
+    zip_and_split_crypto_files(directory)
+    print(f"Zipped data in {directory}")
 # Run the process
 if __name__ == "__main__":
     process_all_files()
