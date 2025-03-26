@@ -1,27 +1,18 @@
 import json
-import requests
-import ssl
+import datetime as dt
 import pandas as pd
 import numpy as np
-import datetime as dt
 from transformers import pipeline
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import seaborn as sns
 import concurrent.futures
-import csv
+import requests
 
 # ----- Global Constants -----
-PAGE_SIZE = 100  # Global page size for NewsAPI queries
-
-# ----- SSL Bypass (if needed) -----
-try:
-    _create_unverified_https_context = ssl._create_unverified_context
-except AttributeError:
-    pass
-else:
-    ssl._create_default_https_context = _create_unverified_https_context
-
+PAGE_SIZE = 10  # Global page size (limit) for API queries
+DEFAULT_START_DATE = "2023-01-01"  # Desired start date (YYYY-MM-DD)
+DEFAULT_END_DATE = "2023-02-28"    # Desired end date (YYYY-MM-DD)
 
 # ----- Load API Key from secrets.json -----
 def load_api_key():
@@ -36,39 +27,39 @@ def load_api_key():
         print("Error loading API key:", e)
         exit(1)
 
-
 NEWS_API_KEY = load_api_key()
-NEWS_API_URL = 'https://newsapi.org/v2/everything'
 
-
-# ----- Function to fetch news using a given query -----
-def get_news(query, page_size=PAGE_SIZE):
+# ----- Function to fetch news using TheNewsAPI with date parameters -----
+def get_news(query, published_after, published_before, page_size=PAGE_SIZE):
+    url = "https://api.thenewsapi.com/v1/news/all"
     params = {
-        'q': query,
-        'language': 'en',
-        'sortBy': 'publishedAt',
-        'pageSize': page_size,
-        'apiKey': NEWS_API_KEY
+        "api_token": NEWS_API_KEY,      # Use 'api_token' parameter for authentication
+        "language": "en",
+        "search": query,                # Search term for the query
+        "limit": page_size,             # Limit on number of articles
+        "published_after": published_after,
+        "published_before": published_before
     }
-    response = requests.get(NEWS_API_URL, params=params)
+    response = requests.get(url, params=params)
     if response.status_code == 200:
         data = response.json()
-        return data.get('articles', [])
+        # TheNewsAPI returns articles under the key "data"
+        return data.get('data', [])
     else:
         print(f"Error fetching news for query {query}: {response.status_code}")
         return []
 
-
 # ----- Combine news from multiple queries for a given ticker -----
-def get_news_combined(ticker):
+def get_news_combined(ticker, published_after, published_before):
+    # First query: general ticker mention
     query1 = f'"{ticker}"'
-    articles1 = get_news(query1)
+    articles1 = get_news(query1, published_after, published_before)
+    # Second query: ticker plus financial keywords to get more market‐focused articles
     query2 = f'"{ticker}" AND ("financial" OR "market" OR "stock" OR "crypto")'
-    articles2 = get_news(query2)
-    # Deduplicate by URL
+    articles2 = get_news(query2, published_after, published_before)
+    # Deduplicate articles by URL
     combined = {article.get('url'): article for article in articles1 + articles2 if article.get('url')}
     return list(combined.values())
-
 
 # ----- Initialize FinBERT Sentiment Pipeline -----
 sentiment_pipeline = pipeline(
@@ -77,24 +68,23 @@ sentiment_pipeline = pipeline(
     tokenizer="yiyanghkust/finbert-tone"
 )
 
-
 def analyze_sentiment(text):
-    """Use FinBERT to analyze sentiment and return a compound score."""
+    """Analyze sentiment using FinBERT and return a compound score."""
     result = sentiment_pipeline(text)[0]
     label = result['label'].upper()
     score = result['score']
-    # Assign compound: positive -> +score, negative -> -score, neutral -> 0
+    # Compound: positive -> +score, negative -> -score, neutral -> 0
     compound = score if label == "POSITIVE" else -score if label == "NEGATIVE" else 0
     return {"label": label, "score": score, "compound": compound}
-
 
 # ----- Aggregate article sentiment on a daily basis -----
 def aggregate_daily_sentiment(articles):
     records = []
     for article in articles:
-        pub_date = article.get('publishedAt')
+        pub_date = article.get('published_at') or article.get('publishedAt')
         if pub_date:
             try:
+                # Convert to datetime (handle Z or timezone offset if needed)
                 date_obj = dt.datetime.fromisoformat(pub_date.replace("Z", "+00:00")).date()
             except Exception:
                 continue
@@ -110,11 +100,10 @@ def aggregate_daily_sentiment(articles):
     else:
         return pd.DataFrame(columns=["date", "compound"])
 
-
 # ----- Process a Single Ticker -----
-def process_ticker(ticker):
+def process_ticker(ticker, published_after, published_before):
     print(f"Processing ticker: {ticker}")
-    articles = get_news_combined(ticker)
+    articles = get_news_combined(ticker, published_after, published_before)
     print(f"Ticker {ticker}: found {len(articles)} articles")
     if not articles:
         return ticker, None, [], {"count": 0, "total_compound": 0}
@@ -125,7 +114,7 @@ def process_ticker(ticker):
     count = 0
 
     for article in articles:
-        pub_date = article.get('publishedAt', '')
+        pub_date = article.get('published_at') or article.get('publishedAt', '')
         try:
             date_obj = dt.datetime.fromisoformat(pub_date.replace("Z", "+00:00")).date()
         except Exception:
@@ -149,7 +138,6 @@ def process_ticker(ticker):
     summary = {"count": count, "total_compound": total_compound}
     return ticker, daily_df, detailed_results, summary
 
-
 # ----- Main Function -----
 def main():
     # Load tickers from tickers.json
@@ -166,17 +154,24 @@ def main():
         print("No tickers found.")
         return
 
+    # Set the date range for news retrieval
+    published_after = DEFAULT_START_DATE
+    published_before = DEFAULT_END_DATE
+    print(f"Fetching news from {published_after} to {published_before}")
+
     ticker_sentiments = {}
     detailed_results_all = []
     summary_all = {}
 
     # Process tickers in parallel using ThreadPoolExecutor.
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        futures = {executor.submit(process_ticker, ticker): ticker for ticker in tickers}
+        futures = {
+            executor.submit(process_ticker, ticker, published_after, published_before): ticker
+            for ticker in tickers
+        }
         for future in concurrent.futures.as_completed(futures):
             ticker, daily_df, detailed_results, summary = future.result()
             if daily_df is not None and not daily_df.empty:
-                # Set index to date
                 ticker_sentiments[ticker] = daily_df.set_index("date")
             summary_all[ticker] = summary
             detailed_results_all.extend(detailed_results)
@@ -208,7 +203,7 @@ def main():
 
         # --- PCA Analysis ---
         pca_data = sentiment_df.values
-        n_components_possible = min(pca_data.shape[0], pca_data.shape[1])  # rows vs. columns
+        n_components_possible = min(pca_data.shape[0], pca_data.shape[1])
         n_components_desired = len(tickers)
         n_components = min(n_components_possible, n_components_desired)
 
@@ -248,6 +243,6 @@ def main():
         else:
             print(f"Ticker: {ticker} - No articles processed.")
 
-
 if __name__ == "__main__":
     main()
+
