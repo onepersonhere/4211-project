@@ -1,8 +1,10 @@
 import os
 import sys
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime
+import pandas as pd
 
+# Ensure yfinance is installed
 try:
     import yfinance as yf
 except ImportError:
@@ -10,73 +12,62 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance"])
     import yfinance as yf
 
-def fetch_stock_data(end_date=None, n_days=7, frequency="1m"):
+def fetch_stock_data(start_date, end_date, frequency="1m", category="train"):
     """
-    Fetches stock data for the MAG-7 tickers from Yahoo Finance.
+    Fetches stock data for MAG-7 tickers from Yahoo Finance.
 
     Parameters:
-    - end_date (str): The end date in 'YYYY-MM-DD' format (default: today).
-    - n_days (int): The number of days before end_date to fetch (default: 7).
-    - frequency (str): The interval of data (e.g., '1m', '2m', '5m', '15m').
+    - start_date (str): 'YYYY-MM-DD' format
+    - end_date (str): 'YYYY-MM-DD' format
+    - frequency (str): Interval (e.g., '1m', '2m', '5m', '15m')
+    - category (str): 'train' or 'test' (used for saving paths)
 
     Returns:
-    - DataFrame: Formatted stock data with columns: ['Datetime', 'Open', 'High', 'Low', 'Close', 'Volume', 'Ticker']
+    - pd.DataFrame: Stock data with standardized columns
     """
-    
-    # List of MAG-7 tickers
     tickers = ["AAPL", "MSFT", "GOOGL", "NVDA", "TSLA", "AMZN", "META"]
+    print(f"\nFetching {frequency} data from {start_date} to {end_date} for {tickers} ({category})...")
 
-    # Set end date (default: today)
-    if end_date is None:
-        end_date = datetime.today().strftime('%Y-%m-%d')
+    # Download from Yahoo Finance
+    stock_data = yf.download(tickers, start=start_date, end=end_date, interval=frequency, group_by='ticker', auto_adjust=False, threads=True, progress=False)
 
-    # Calculate start date
-    start_date = (datetime.strptime(end_date, '%Y-%m-%d') - timedelta(days=n_days)).strftime('%Y-%m-%d')
+    # Check if data is empty
+    if stock_data.empty:
+        print(f"Warning: No data returned for {frequency} from {start_date} to {end_date}")
+        return pd.DataFrame()
 
-    print(f"Fetching {frequency} data from {start_date} to {end_date} for {tickers}...")
-
-    # Fetch stock data
-    stock_data = yf.download(tickers, start=start_date, end=end_date, interval=frequency)
-
-    # Reset multi-index and flatten column names
+    # Flatten MultiIndex and reset
     stock_data = stock_data.stack(level=1).reset_index()
 
-    # Rename columns properly
-    stock_data.rename(columns={"level_1": "Ticker", "Datetime": "Datetime"}, inplace=True)
+    # Fix column names
+    stock_data.rename(columns={"level_0": "Datetime", "level_1": "Ticker"}, inplace=True)
 
-    # Ensure correct column order
+    # Select and reorder useful columns
     stock_data = stock_data[["Datetime", "Open", "High", "Low", "Close", "Volume", "Ticker"]]
 
-    # Save to CSV
-    filename = f"stock_prices_{frequency}"
-    file_path = f'./stock/data_raw/{filename}.csv'
-
-    # Create the directory if it doesn't exist
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
-    # Save the DataFrame to the specified path
+    # Create folder and save file
+    filename = f"stock_prices_{frequency}_{category}.csv"
+    folder_path = f'./stock/data_raw/{category}/'
+    os.makedirs(folder_path, exist_ok=True)
+    file_path = os.path.join(folder_path, filename)
     stock_data.to_csv(file_path, index=False)
 
-    print(f"Stock data successfully downloaded and saved as '{filename}.csv'.")
-    
+    print(f"Saved {category} data to '{file_path}'")
     return stock_data
 
-# Main function to run for multiple frequencies
-def fetch_for_multiple_frequencies():
-    end_date = datetime.today().strftime('%Y-%m-%d')
+def fetch_for_train_and_test():
+    # Define train and test date ranges
+    train_start = "2025-01-01"
+    train_end = "2025-02-28"
+    test_start = "2025-03-01"
+    test_end = "2025-03-26"
 
-    # Define frequencies and corresponding n_days
-    frequencies = {
-        "1m": 7,
-        "2m": 59,
-        "5m": 59,
-        "15m": 59
-    }
+    # Define frequencies
+    frequencies = ["2m", "5m", "15m"]
 
-    # Fetch and save data for each frequency
-    for frequency, n_days in frequencies.items():
-        fetch_stock_data(end_date=end_date, n_days=n_days, frequency=frequency)
+    for freq in frequencies:
+        fetch_stock_data(start_date=train_start, end_date=train_end, frequency=freq, category="train")
+        fetch_stock_data(start_date=test_start, end_date=test_end, frequency=freq, category="test")
 
-# Run for all frequencies
 if __name__ == "__main__":
-    fetch_for_multiple_frequencies()
+    fetch_for_train_and_test()
