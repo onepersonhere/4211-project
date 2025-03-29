@@ -84,72 +84,99 @@ def compute_portfolio_performance(weights, mu, cov, rf=0.0):
     return vol, ret, sharpe
 
 
-def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000):
+
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.optimize import minimize
+from scipy.interpolate import interp1d
+
+def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_kind='cubic'):
     """
-    Compute the margin-constrained efficient frontier via a high-resolution param sweep.
-    The resolution is increased so that one of the candidate points nearly matches the tangency portfolio.
+    Margin-constrained frontier with a spline that passes exactly through
+    GMV and Tangency portfolios.
     """
     fig, ax = plt.subplots()
-    one = np.ones(len(mu))
-    # Compute parameters for unconstrained quadratic frontier (for reference)
-    inv_cov = np.linalg.inv(cov)
-    A = one.T @ inv_cov @ one
-    B = one.T @ inv_cov @ mu
-    C = mu.T @ inv_cov @ mu
-    Delta = A * C - B ** 2
 
-    # Set a target return range (r_min to r_max)
-    r_min = B / A
+    # 1) Param-sweep over target returns
+    # Compute GMV first
+    w_gmv = find_global_min_variance(cov, max_exposure)
+    vol_gmv, ret_gmv, _ = compute_portfolio_performance(w_gmv, mu, cov, 0.0)
+
+    r_min = ret_gmv  # or ret_gmv * 0.95, a bit below GMV
     r_max = max(mu) * 1.5
     r_vals = np.linspace(r_min, r_max, resolution)
     frontier_points = []
-    for r_target in r_vals:
-        def objective(w):
-            return np.sqrt(w @ cov @ w)
 
+    def objective(w):
+        return np.sqrt(w @ cov @ w)
+
+    for r_target in r_vals:
         cons = [
             {"type": "eq", "fun": lambda w: np.sum(w) - 1},
-            {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))},
-            {"type": "eq", "fun": lambda w: np.dot(w, mu) - r_target}
+            {"type": "ineq","fun": lambda w: max_exposure - np.sum(np.abs(w))},
+            {"type": "eq", "fun": lambda w: w @ mu - r_target}
         ]
-        n = len(mu)
-        w0 = np.ones(n) / n
+        w0 = np.ones(len(mu)) / len(mu)
         res = minimize(objective, w0, constraints=cons, method="SLSQP")
         if res.success:
             vol_ = np.sqrt(res.x @ cov @ res.x)
             frontier_points.append((vol_, r_target))
+
     frontier_points = np.array(frontier_points)
-    if frontier_points.size:
-        ax.plot(frontier_points[:, 0], frontier_points[:, 1], 'b-', label="Efficient Frontier")
-    else:
+    if frontier_points.size == 0:
         print("No feasible frontier points found under margin constraints.")
+        return None, None, None
 
-    # Compute margin-constrained tangency portfolio
-    w_tan = find_tangency_portfolio(mu, cov, rf, max_exposure)
-    vol_tan, ret_tan, _ = compute_portfolio_performance(w_tan, mu, cov, rf)
-    ax.scatter([vol_tan], [ret_tan], c="red", marker="*", s=200, label="Tangency Portfolio")
-    print("\nTangency Portfolio Weights (Margin-Constrained):")
-    for asset, weight in zip(mu.index, w_tan):
-        print(f"  {asset}: {weight:.4f}")
-
-    # Global Minimum Variance portfolio under margin constraint
+    # 2) Global Minimum Variance
     w_gmv = find_global_min_variance(cov, max_exposure)
     vol_gmv, ret_gmv, _ = compute_portfolio_performance(w_gmv, mu, cov, 0.0)
     ax.scatter([vol_gmv], [ret_gmv], c="green", marker="o", s=100, label="GMV Portfolio")
-    print("\nGlobal Minimum Variance (GMV) Weights:")
-    for asset, weight in zip(mu.index, w_gmv):
-        print(f"  {asset}: {weight:.4f}")
 
-    # Capital Market Line from (0, rf) to tangency point
-    sharpe_tan = (ret_tan - rf) / (vol_tan if vol_tan > 1e-9 else 1e-9)
-    sigma_vals = np.linspace(0, vol_tan * 1.5, 100)
-    cml = rf + sharpe_tan * sigma_vals
-    ax.plot(sigma_vals, cml, 'k--', linewidth=2, label="Capital Market Line")
+    # 3) Tangency Portfolio
+    w_tan = find_tangency_portfolio(mu, cov, rf, max_exposure)
+    vol_tan, ret_tan, _ = compute_portfolio_performance(w_tan, mu, cov, rf)
+    ax.scatter([vol_tan], [ret_tan], c="red", marker="*", s=200, label="Tangency Portfolio")
+
+    # 4) Subset frontier points to [vol_gmv, vol_tan]
+    min_vol = min(vol_gmv, vol_tan)
+    max_vol = max(vol_gmv, vol_tan)
+    subset = frontier_points[
+        (frontier_points[:,0] >= min_vol) &
+        (frontier_points[:,0] <= max_vol)
+    ]
+
+    # 5) Ensure GMV & Tangency are in the subset
+    gmvtup = (vol_gmv, ret_gmv)
+    tantup = (vol_tan, ret_tan)
+    subset_list = subset.tolist()
+    if gmvtup not in subset_list:
+        subset_list.append(gmvtup)
+    if tantup not in subset_list:
+        subset_list.append(tantup)
+    subset = np.array(subset_list)
+
+    # 6) Sort by volatility
+    subset = subset[subset[:,0].argsort()]
+
+    # 7) Interpolate with a spline (linear, quadratic, or cubic)
+    x = subset[:,0]  # vol
+    y = subset[:,1]  # return
+    f = interp1d(x, y, kind=spline_kind)
+
+    # 8) Plot the interpolated curve
+    x_fit = np.linspace(x[0], x[-1], 200)
+    y_fit = f(x_fit)
+    ax.plot(x_fit, y_fit, 'b--', label="Interpolated Frontier")
+
+    # 9) Capital Market Line
+    sharpe_tan = (ret_tan - rf)/(vol_tan if vol_tan>1e-9 else 1e-9)
+    sigmas = np.linspace(0, vol_tan*1.5, 100)
+    cml = rf + sharpe_tan*sigmas
+    ax.plot(sigmas, cml, 'k--', linewidth=2, label="Capital Market Line")
 
     ax.set_xlabel("Volatility (Std Dev)")
     ax.set_ylabel("Return")
-    ax.set_title(
-        f"Efficient Frontier (Margin: {1 / max_exposure * 100:.0f}% maintenance) with CAPM (Risk-Free = {rf:.2%})")
+    ax.set_title(f"Frontier (Margin={1/max_exposure*100:.0f}%), Spline '{spline_kind}', R_f={rf:.2%}")
     ax.legend()
     plt.show()
     return w_tan, vol_tan, ret_tan
