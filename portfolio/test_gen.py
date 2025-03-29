@@ -16,8 +16,8 @@ def generate_data(tickers, start_date, end_date, freq='D'):
             # Wider close price range => more variability
             close_price = np.random.uniform(50, 500)
             # Larger random returns (e.g., ±5%)
-            actual_return = np.random.uniform(-0.05, 0.05)
-            predicted_return = np.random.uniform(-0.05, 0.05)
+            actual_return = np.random.uniform(-0.20, 0.20)
+            predicted_return = np.random.uniform(-0.20, 0.20)
 
             data_rows.append({
                 "Date": date,
