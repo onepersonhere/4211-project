@@ -1,9 +1,6 @@
-import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import datetime
 import yfinance as yf
-from scipy.optimize import minimize
 
 
 def get_tbill_data(start, end):
@@ -97,7 +94,7 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
     """
     fig, ax = plt.subplots()
 
-    # 1) Param-sweep over target returns
+    # Param-sweep over target returns
     # Compute GMV first
     w_gmv = find_global_min_variance(cov, max_exposure)
     vol_gmv, ret_gmv, _ = compute_portfolio_performance(w_gmv, mu, cov, 0.0)
@@ -127,17 +124,17 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
         print("No feasible frontier points found under margin constraints.")
         return None, None, None
 
-    # 2) Global Minimum Variance
+    # Global Minimum Variance
     w_gmv = find_global_min_variance(cov, max_exposure)
     vol_gmv, ret_gmv, _ = compute_portfolio_performance(w_gmv, mu, cov, 0.0)
     ax.scatter([vol_gmv], [ret_gmv], c="green", marker="o", s=100, label="GMV Portfolio")
 
-    # 3) Tangency Portfolio
+    # Tangency Portfolio
     w_tan = find_tangency_portfolio(mu, cov, rf, max_exposure)
     vol_tan, ret_tan, _ = compute_portfolio_performance(w_tan, mu, cov, rf)
     ax.scatter([vol_tan], [ret_tan], c="red", marker="*", s=200, label="Tangency Portfolio")
 
-    # 4) Subset frontier points to [vol_gmv, vol_tan]
+    # Subset frontier points to [vol_gmv, vol_tan]
     min_vol = min(vol_gmv, vol_tan)
     max_vol = max(vol_gmv, vol_tan)
     subset = frontier_points[
@@ -145,7 +142,7 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
         (frontier_points[:,0] <= max_vol)
     ]
 
-    # 5) Ensure GMV & Tangency are in the subset
+    # Ensure GMV & Tangency are in the subset
     gmvtup = (vol_gmv, ret_gmv)
     tantup = (vol_tan, ret_tan)
     subset_list = subset.tolist()
@@ -155,20 +152,20 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
         subset_list.append(tantup)
     subset = np.array(subset_list)
 
-    # 6) Sort by volatility
+    # Sort by volatility
     subset = subset[subset[:,0].argsort()]
 
-    # 7) Interpolate with a spline (linear, quadratic, or cubic)
+    # Interpolate with a spline (linear, quadratic, or cubic)
     x = subset[:,0]  # vol
     y = subset[:,1]  # return
     f = interp1d(x, y, kind=spline_kind)
 
-    # 8) Plot the interpolated curve
+    # Plot the interpolated curve
     x_fit = np.linspace(x[0], x[-1], 200)
     y_fit = f(x_fit)
     ax.plot(x_fit, y_fit, 'b--', label="Interpolated Frontier")
 
-    # 9) Capital Market Line
+    # Capital Market Line
     sharpe_tan = (ret_tan - rf)/(vol_tan if vol_tan>1e-9 else 1e-9)
     sigmas = np.linspace(0, vol_tan*1.5, 100)
     cml = rf + sharpe_tan*sigmas
@@ -275,7 +272,6 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
         window_dates = dates[dates <= final_rebal_date][-lookback:]
         window_returns = combined.loc[window_dates, asset_df.columns].dropna(axis=1, how="any")
         mu_final, cov_final = mean_cov_matrix(window_returns)
-        # For plotting, use the annual T-bill rate for better intercept visibility
         rf_annual = combined.loc[final_rebal_date, "Rate"]
         w_tan_final, vol_tan, ret_tan = plot_efficient_frontier(mu_final, cov_final, rf_annual, max_exposure,
                                                                 resolution=1000)
@@ -306,7 +302,6 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
 if __name__ == "__main__":
     start_date = datetime.datetime(2025, 1, 1)
     end_date = datetime.datetime(2025, 2, 28)
-    # You can adjust lookback, margin (e.g. 0.25 for 25%), and target_return (annualized)
     portfolio_values, weights = time_series_rebalance(
         "test_crypto.csv",
         "test_stocks.csv",
@@ -314,5 +309,5 @@ if __name__ == "__main__":
         end_date,
         lookback=32,
         margin=0.25,
-        target_return=0.08  # e.g., 8% annual target return
+        target_return=0.08
     )
