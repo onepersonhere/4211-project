@@ -11,8 +11,12 @@ def to_milliseconds(date_str):
     return int(dt.timestamp() * 1000)  # Convert to milliseconds
 
 # Set time to UTC explicitly
-start_time_utc = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
-end_time_utc = datetime(2025, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+#start_time_utc = datetime(2025, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+#end_time_utc = datetime(2025, 3, 1, 0, 0, 0, tzinfo=timezone.utc)
+
+# Get validation period data
+start_time_utc = datetime(2025, 3, 1, 0, 1, 0, tzinfo=timezone.utc)
+end_time_utc = datetime(2025, 3, 29, 0, 0, 0, tzinfo=timezone.utc)
 
 # Convert to milliseconds, replacing with UTC timezone
 start_time = to_milliseconds(start_time_utc.strftime("%Y-%m-%d %H:%M:%S"))
@@ -86,6 +90,14 @@ script_dir = os.path.dirname(os.path.abspath(__file__))
 output_dir = os.path.join(script_dir, "data_raw")
 os.makedirs(output_dir, exist_ok=True)  # Create the folder if it doesn't exist
 
+# Get only validation period data 
+interval_data = get_binance_data('1m')
+interval_data = pd.concat(interval_data, ignore_index=True)
+interval_data = interval_data.rename(columns={"Open Time": "Date"})
+filename = os.path.join(output_dir, f"crypto_prices_1m_validation.csv")
+interval_data.to_csv(filename, index=False)
+print(f"Saved data to {filename}")
+'''
 # Get data for each interval
 for interval in intervals:
     interval_data = get_binance_data(interval)
@@ -103,4 +115,4 @@ directory = os.path.join(script_dir, "data_raw")
 zip_filename = os.path.join(script_dir, "data_raw")
 shutil.make_archive(zip_filename, 'zip', directory)
 print(f"Zipped data to {zip_filename}.zip")
-
+'''

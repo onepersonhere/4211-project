@@ -158,6 +158,7 @@ def process_all_files():
 
     for file_name in os.listdir(input_dir):
         if file_name.endswith('.csv'):
+        #if file_name == 'crypto_prices_1m_validation.csv':
             process_crypto_data(script_dir, file_name.replace('.csv', ''))
 
     
