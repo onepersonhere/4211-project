@@ -300,11 +300,11 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
 
 
 if __name__ == "__main__":
-    start_date = datetime.datetime(2025, 1, 1)
-    end_date = datetime.datetime(2025, 2, 28)
+    start_date = datetime.datetime(2025, 3, 1)
+    end_date = datetime.datetime(2025, 3, 24)
     portfolio_values, weights = time_series_rebalance(
-        "test_crypto.csv",
-        "test_stocks.csv",
+        "./stock/returns.csv",
+        "./crypto/copy/returns.csv",
         start_date,
         end_date,
         lookback=32,
