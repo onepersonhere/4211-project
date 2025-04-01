@@ -15,8 +15,8 @@ API_KEYS = [
     "GFF8Uj9VwSVcvv9YnFyoWwsy2c5Y8WIt"
 ]
 
-START_DATE = datetime.strptime("2024-12-31", "%Y-%m-%d")
-END_DATE = datetime.today()
+START_DATE = datetime.strptime("2025-01-01", "%Y-%m-%d")
+END_DATE = datetime.today() - timedelta(days=1)
 CHUNK_DAYS = 30
 MAX_ROWS = 50000
 SAVE_PATH = "./stock/data_raw"
@@ -59,14 +59,14 @@ def fetch_chunk_for_ticker(ticker, api_key, start, end):
 def fetch_minute_data_all_tickers():
     all_data = []
 
-    for i in range(0, len(TICKERS), 5):
-        batch_tickers = TICKERS[i:i + 5]
+    for i in range(0, len(TICKERS), 4):
+        batch_tickers = TICKERS[i:i + 4]
         api_keys = API_KEYS[:len(batch_tickers)]
         pointers = {ticker: START_DATE for ticker in batch_tickers}
         done = {ticker: False for ticker in batch_tickers}
 
         while not all(done.values()):
-            with ThreadPoolExecutor(max_workers=5) as executor:
+            with ThreadPoolExecutor(max_workers=4) as executor:
                 futures = []
 
                 for j, ticker in enumerate(batch_tickers):
