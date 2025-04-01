@@ -12,7 +12,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # --- Helper functions ---
 
 def get_tbill_data(start, end):
-    tbill = yf.download("^IRX", start=start, end=end, progress=False, auto_adjust=False)
+    try:
+        tbill = yf.download("^IRX", start=start, end=end, progress=False, auto_adjust=False)
+    except Exception as e:
+        print("Failed to download T-bill data:", e)
+        return pd.DataFrame()
     tbill.reset_index(inplace=True)
     if isinstance(tbill.columns, pd.MultiIndex):
         tbill.columns = tbill.columns.get_level_values(0)
@@ -51,6 +55,7 @@ def find_tangency_portfolio(mu, cov, rf, max_exposure):
     ]
     bounds = [(-10, 10)] * n
     res = minimize(negative_sharpe, init_w, method="SLSQP", constraints=cons, bounds=bounds)
+
     return res.x
 
 
@@ -196,15 +201,20 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
 
     # Load and resample asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
+    crypto_df = crypto_df.loc[(crypto_df.index >= start_date) & (crypto_df.index <= end_date)]
     stock_df = load_asset_returns(stock_csv, freq="2min")
+    stock_df = stock_df.loc[(stock_df.index >= start_date) & (stock_df.index <= end_date)]
     asset_df = crypto_df.join(stock_df, how="inner")
-    asset_df.dropna(axis=1, how="all", inplace=True)
+    asset_df.dropna(how="any", inplace=True)
     if asset_df.empty:
         print("No overlapping data.")
         return pd.DataFrame(), {}
 
     # Load T-bill data and align to 2-minute timestamps
     tbill_df = get_tbill_data(start_date, end_date)
+    if tbill_df.empty:
+        print("T-bill data download failed. Skipping portfolio rebalancing.")
+        return pd.DataFrame(), {}
     tbill_df = tbill_df.reindex(asset_df.index, method="ffill")
     combined = asset_df.join(tbill_df, how="inner")
     dates = combined.index
@@ -258,8 +268,8 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
     # Plot the efficient frontier at the final rebalancing point using annualized returns
     if weights_dict:
         final_rebal_date = list(weights_dict.keys())[-1]
-        window_dates = dates[dates <= final_rebal_date][-lookback:]
-        window_returns = combined.loc[window_dates, asset_df.columns].dropna(axis=1, how="any")
+        window_dates = asset_df.index[asset_df.index <= final_rebal_date][-lookback:]
+        window_returns = combined.loc[window_dates, asset_df.columns].fillna(0.0)
         if not window_returns.empty:
             mu_final_raw, cov_final_raw = mean_cov_matrix(window_returns)
             intervals_per_day = 195
@@ -343,8 +353,8 @@ if __name__ == "__main__":
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
-        rebalance_days=7,  # Change to any number of days for a different interval
-        lookback=64,
+        rebalance_days=1,  # Change to any number of days for a different interval
+        lookback=8,
         margin=0.25,
         target_return=0.8
     )
