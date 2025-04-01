@@ -9,7 +9,7 @@ from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 
-# --- Existing functions ---
+# --- Helper functions ---
 
 def get_tbill_data(start, end):
     tbill = yf.download("^IRX", start=start, end=end, progress=False, auto_adjust=False)
@@ -151,8 +151,6 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
     return w_tan, vol_tan, ret_tan
 
 
-# --- New helper for parallel processing with annualization fix ---
-
 def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
     """
     Process a single rebalancing iteration:
@@ -160,7 +158,6 @@ def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
       - Calculates the realized return for the next period.
     Returns a tuple:
       (iteration index, current_date, next_date, w_tan, realized_return)
-    If the rolling window yields no valid data, returns None for weights and return.
     """
     current_date = dates[i]
     next_date = dates[i + 1]
@@ -191,18 +188,17 @@ def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
     return (i, current_date, next_date, w_tan, realized_ret)
 
 
-# --- Modified time_series_rebalance with parallel execution and annualization fix ---
-
-def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
-                          lookback=60, margin=0.25, target_return=None):
+# --- Modified time_series_rebalance ---
+# Now accepts optional start_date and end_date parameters.
+def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=60, margin=0.25,
+                          target_return=None):
     max_exposure = 1 / margin
 
     # Load and resample asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
     stock_df = load_asset_returns(stock_csv, freq="2min")
     asset_df = crypto_df.join(stock_df, how="inner")
-    asset_df = asset_df.loc[(asset_df.index >= start_date) & (asset_df.index <= end_date)]
-    asset_df.dropna(how="all", inplace=True)
+    asset_df.dropna(axis=1, how="all", inplace=True)
     if asset_df.empty:
         print("No overlapping data.")
         return pd.DataFrame(), {}
@@ -229,7 +225,7 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
             result = future.result()
             results.append(result)
 
-    # Filter out iterations with invalid (None) results and sort by iteration index
+    # Filter and sort valid iterations
     results = [r for r in results if r[3] is not None]
     results.sort(key=lambda x: x[0])
 
@@ -295,15 +291,65 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
     return portvals_df, weights_dict
 
 
+# --- General periodic rebalancing function ---
+def periodic_rebalance(crypto_csv, stock_csv, rebalance_days=1, lookback=60, margin=0.25, target_return=None):
+    """
+    General rebalancing function that splits the data into segments of a specified number of days.
+    For each segment, time_series_rebalance is run using the segment start and end dates.
+
+    Parameters:
+      rebalance_days: Number of calendar days between rebalancing endpoints.
+    """
+    # Load asset returns once to determine overall date range.
+    crypto_df = load_asset_returns(crypto_csv, freq="2min")
+    stock_df = load_asset_returns(stock_csv, freq="2min")
+    asset_df = crypto_df.join(stock_df, how="inner")
+    asset_df.dropna(how="all", inplace=True)
+    if asset_df.empty:
+        print("No overlapping data.")
+        return {}
+
+    overall_start = asset_df.index.min()
+    overall_end = asset_df.index.max()
+
+    # Determine period endpoints using a resample rule (e.g., '1D' for daily, '7D' for weekly)
+    period_endpoints = asset_df.resample(f'{rebalance_days}D').last().index
+
+    results = {}
+    segment_start = overall_start
+    for endpoint in period_endpoints:
+        if endpoint <= segment_start:
+            continue
+        print(f"Running rebalancing for period: {segment_start} to {endpoint}")
+        portvals_df, weights_dict = time_series_rebalance(
+            crypto_csv, stock_csv,
+            lookback=lookback,
+            margin=margin,
+            target_return=target_return,
+            start_date=segment_start,
+            end_date=endpoint
+        )
+        results[endpoint] = (portvals_df, weights_dict)
+        # Update segment_start to the current endpoint for the next iteration.
+        segment_start = endpoint
+    return results
+
+
+# --- Main block ---
 if __name__ == "__main__":
-    start_date = datetime.datetime(2025, 3, 1)
-    end_date = datetime.datetime(2025, 3, 24)
-    portfolio_values, weights = time_series_rebalance(
-        "../crypto/copy/returns.csv",
-        "../stock/returns.csv",
-        start_date,
-        end_date,
+    crypto_csv_path = "../crypto/copy/returns.csv"
+    stock_csv_path = "../stock/returns.csv"
+
+    daily_results = periodic_rebalance(
+        crypto_csv_path,
+        stock_csv_path,
+        rebalance_days=7,  # Change to any number of days for a different interval
         lookback=64,
         margin=0.25,
-        target_return=0.08
+        target_return=0.8
     )
+
+    # Process the results: here we print the final portfolio value for each segment.
+    for period_end, (portvals_df, weights_dict) in daily_results.items():
+        print(f"\n--- Results for period ending on {period_end.date()} ---")
+        print(portvals_df.tail(1))
