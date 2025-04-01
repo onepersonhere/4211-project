@@ -8,6 +8,7 @@ from scipy.interpolate import interp1d
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+
 # --- Existing functions ---
 
 def get_tbill_data(start, end):
@@ -16,9 +17,10 @@ def get_tbill_data(start, end):
     if isinstance(tbill.columns, pd.MultiIndex):
         tbill.columns = tbill.columns.get_level_values(0)
     tbill.set_index("Date", inplace=True)
-    tbill["Rate"] = tbill["Close"] / 100.0
-    tbill["Daily_Rf"] = tbill["Rate"] / 252
+    tbill["Rate"] = tbill["Close"] / 100.0  # Annual T-bill yield
+    tbill["Daily_Rf"] = tbill["Rate"] / 252  # Daily risk-free rate
     return tbill[["Rate", "Daily_Rf"]]
+
 
 def load_asset_returns(csv_path, freq="2min"):
     df = pd.read_csv(csv_path, parse_dates=["Date"])
@@ -27,10 +29,12 @@ def load_asset_returns(csv_path, freq="2min"):
     pivoted = pivoted.resample(freq).last()
     return pivoted
 
+
 def mean_cov_matrix(returns_df):
     mu = returns_df.mean()
     cov = returns_df.cov()
     return mu, cov
+
 
 def find_tangency_portfolio(mu, cov, rf, max_exposure):
     n = len(mu)
@@ -49,6 +53,7 @@ def find_tangency_portfolio(mu, cov, rf, max_exposure):
     res = minimize(negative_sharpe, init_w, method="SLSQP", constraints=cons, bounds=bounds)
     return res.x
 
+
 def find_global_min_variance(cov, max_exposure):
     n = cov.shape[0]
     init_w = np.ones(n) / n
@@ -64,11 +69,13 @@ def find_global_min_variance(cov, max_exposure):
     res = minimize(portfolio_vol, init_w, method="SLSQP", constraints=cons, bounds=bounds)
     return res.x
 
+
 def compute_portfolio_performance(weights, mu, cov, rf=0.0):
     ret = np.dot(weights, mu)
     vol = np.sqrt(weights @ cov @ weights)
     sharpe = (ret - rf) / (vol if vol > 1e-9 else 1e-9)
     return vol, ret, sharpe
+
 
 def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_kind='cubic'):
     fig, ax = plt.subplots()
@@ -143,7 +150,8 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_k
     plt.show()
     return w_tan, vol_tan, ret_tan
 
-# --- New helper for parallel processing ---
+
+# --- New helper for parallel processing with annualization fix ---
 
 def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
     """
@@ -160,15 +168,30 @@ def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
     window_returns = combined.loc[window_dates, asset_df.columns].dropna(axis=1, how="any")
     if window_returns.empty:
         return (i, current_date, next_date, None, None)
+
+    # Compute raw mean and covariance from 2-minute returns
+    mu_raw, cov_raw = mean_cov_matrix(window_returns)
+
+    # Annualize: assume 195 two-minute intervals per day and 252 trading days per year
+    intervals_per_day = 195
+    annualization_factor = intervals_per_day * 252
+    mu_ann = mu_raw * annualization_factor
+    cov_ann = cov_raw * annualization_factor
+
+    # Use the annual T-bill rate (not the daily rate)
+    rf_annual = combined.loc[current_date, "Rate"]
+
+    # Find tangency portfolio using annualized parameters
+    w_tan = find_tangency_portfolio(mu_ann, cov_ann, rf_annual, max_exposure)
+
+    # Get next period's actual 2-minute returns (not annualized)
     window_cols = window_returns.columns
-    mu_window, cov_window = mean_cov_matrix(window_returns)
-    rf_daily = combined.loc[current_date, "Daily_Rf"]
-    w_tan = find_tangency_portfolio(mu_window, cov_window, rf_daily, max_exposure)
     r_next = combined.loc[next_date, window_cols].fillna(0.0)
     realized_ret = np.dot(w_tan, r_next)
     return (i, current_date, next_date, w_tan, realized_ret)
 
-# --- Modified time_series_rebalance with parallel execution ---
+
+# --- Modified time_series_rebalance with parallel execution and annualization fix ---
 
 def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
                           lookback=60, margin=0.25, target_return=None):
@@ -176,7 +199,7 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
 
     # Load and resample asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
-    stock_df  = load_asset_returns(stock_csv, freq="2min")
+    stock_df = load_asset_returns(stock_csv, freq="2min")
     asset_df = crypto_df.join(stock_df, how="inner")
     asset_df = asset_df.loc[(asset_df.index >= start_date) & (asset_df.index <= end_date)]
     asset_df.dropna(how="all", inplace=True)
@@ -184,7 +207,7 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
         print("No overlapping data.")
         return pd.DataFrame(), {}
 
-    # Load T-bill data and align to 2min timestamps
+    # Load T-bill data and align to 2-minute timestamps
     tbill_df = get_tbill_data(start_date, end_date)
     tbill_df = tbill_df.reindex(asset_df.index, method="ffill")
     combined = asset_df.join(tbill_df, how="inner")
@@ -197,7 +220,6 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
     results = []
     iterations = range(lookback, len(dates) - 1)
     with ProcessPoolExecutor() as executor:
-        # Submit all iterations to the pool
         futures = {
             executor.submit(process_iteration, i, dates, combined, asset_df, lookback, max_exposure): i
             for i in iterations
@@ -237,16 +259,23 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
     print(f"Max Drawdown            : {max_drawdown:.2%}")
     print(f"Win Rate                : {win_rate:.2%}")
 
-    # Optionally, plot the efficient frontier at the final rebalancing point
+    # Plot the efficient frontier at the final rebalancing point using annualized returns
     if weights_dict:
         final_rebal_date = list(weights_dict.keys())[-1]
         window_dates = dates[dates <= final_rebal_date][-lookback:]
         window_returns = combined.loc[window_dates, asset_df.columns].dropna(axis=1, how="any")
-        mu_final, cov_final = mean_cov_matrix(window_returns)
-        rf_annual = combined.loc[final_rebal_date, "Rate"]
-        w_tan_final, vol_tan, ret_tan = plot_efficient_frontier(
-            mu_final, cov_final, rf_annual, max_exposure, resolution=1000
-        )
+        if not window_returns.empty:
+            mu_final_raw, cov_final_raw = mean_cov_matrix(window_returns)
+            intervals_per_day = 195
+            annualization_factor = intervals_per_day * 252
+            mu_final = mu_final_raw * annualization_factor
+            cov_final = cov_final_raw * annualization_factor
+            rf_annual = combined.loc[final_rebal_date, "Rate"]
+            w_tan_final, vol_tan, ret_tan = plot_efficient_frontier(
+                mu_final, cov_final, rf_annual, max_exposure, resolution=1000
+            )
+        else:
+            print("Not enough data for efficient frontier plot at final rebalancing.")
     else:
         print("No rebalancing steps performed.")
         return portvals_df, weights_dict
@@ -265,6 +294,7 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date,
 
     return portvals_df, weights_dict
 
+
 if __name__ == "__main__":
     start_date = datetime.datetime(2025, 3, 1)
     end_date = datetime.datetime(2025, 3, 24)
@@ -273,7 +303,7 @@ if __name__ == "__main__":
         "../stock/returns.csv",
         start_date,
         end_date,
-        lookback=10,
+        lookback=64,
         margin=0.25,
         target_return=0.08
     )
