@@ -507,12 +507,12 @@ if __name__ == "__main__":
         crypto_csv_path,
         stock_csv_path,
         rebalance_days=7,      # every 14 days
-        lookback=64,
+        lookback=128,
         margin=0.25,
         method="max_return_for_volatility",  # new method using target volatility
         use_tbills=False,       # ignore T-bill data => rf=0 for tangency
         target_return=None,     # not used for this method
-        target_vol=0.3          # set target volatility (e.g. 0.3)
+        target_vol=0.5          # set target volatility (e.g. 0.3)
     )
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
