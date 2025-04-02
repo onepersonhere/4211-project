@@ -367,6 +367,7 @@ def time_series_rebalance(
     portfolio_val = 1.0
     portvals = []
     weights_dict = {}
+    # record the initial portfolio value at the first rebalancing date
     portvals.append((dates[lookback], portfolio_val))
     for i, current_date, next_date, w, realized_ret in results:
         weights_dict[current_date] = w
@@ -500,31 +501,77 @@ def periodic_rebalance(
     return results
 
 
-# --- Example usage (if run directly) ---
 if __name__ == "__main__":
     crypto_csv_path = "../crypto/returns.csv"
     stock_csv_path = "../stock/returns.csv"
 
-    # Example: Rebalance every 14 days, look back 64 intervals, 25% margin.
-    # Using the 'max_return_for_volatility' method with a target volatility.
+    # Rebalance every 7 days, look back 64 intervals, 25% margin.
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
-        rebalance_days=7,      # every 14 days
+        rebalance_days=7,
         lookback=128,
         margin=0.25,
-        method="max_return_for_volatility",  # new method using target volatility
-        use_tbills=False,       # ignore T-bill data => rf=0 for tangency
-        target_return=None,     # not used for this method
-        target_vol=0.5          # set target volatility (e.g. 0.3)
+        method="max_return_for_volatility",
+        use_tbills=False,
+        target_return=None,
+        target_vol=0.5
     )
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
         print(f"\n--- Results for period ending on {period_end.date()} ---")
         print(portvals_df.tail(1))
 
+    # Read both CSVs and take the union of tickers.
+    crypto_orig = pd.read_csv(crypto_csv_path, parse_dates=["Date"])
+    stock_orig = pd.read_csv(stock_csv_path, parse_dates=["Date"])
+    asset_names = sorted(set(crypto_orig["Ticker"].unique()).union(set(stock_orig["Ticker"].unique())))
+
+    # Collect all rebalancing weights.
+    all_weights = []
+    for period, (portvals_df, weights_dict) in daily_results.items():
+        for date, w in weights_dict.items():
+            # Convert the numpy array into a dictionary using the universal asset_names order.
+            w_dict = dict(zip(asset_names, w))
+            all_weights.append((date, w_dict))
+
+    weights_df = pd.DataFrame(all_weights, columns=["RebalanceDate", "WeightDict"])
+    weights_df.sort_values("RebalanceDate", inplace=True)
+    # Create a Series with index = RebalanceDate and value = the weight dictionary.
+    weights_series = weights_df.set_index("RebalanceDate")["WeightDict"]
+
+    def update_csv_with_weights(csv_path, output_path, weights_series):
+        # Load the original CSV file.
+        df = pd.read_csv(csv_path, parse_dates=["Date"])
+        df.sort_values("Date", inplace=True)
+
+        # Prepare weights for merging by resetting the index.
+        weights_merge = weights_series.reset_index()
+        weights_merge.columns = ["RebalanceDate", "WeightDict"]
+        weights_merge.sort_values("RebalanceDate", inplace=True)
+
+        # Perform an as-of merge: for each row in df, find the most recent RebalanceDate.
+        df = pd.merge_asof(df, weights_merge, left_on="Date", right_on="RebalanceDate", direction="backward")
+
+        # For each row, extract the weight corresponding to the row's Ticker.
+        def extract_weight(row):
+            if pd.isna(row["WeightDict"]):
+                return np.nan
+            # Return the weight for the ticker; if missing, np.nan.
+            return row["WeightDict"].get(row["Ticker"], np.nan)
+
+        df["Weight"] = df.apply(extract_weight, axis=1)
+
+        # Optionally drop helper columns.
+        df.drop(columns=["RebalanceDate", "WeightDict"], inplace=True)
+
+        df.to_csv(output_path, index=False)
+
+    update_csv_with_weights(crypto_csv_path, "crypto_csv_with_weights.csv", weights_series)
+    update_csv_with_weights(stock_csv_path, "stock_csv_with_weights.csv", weights_series)
+
 
 # rebalancing -> get max return portfolio (regardless of tangent)
 # calculate sharpe ratio, draw down etc.
-# duplicate the df from stock's returns and crypto's returns (add the weight in) for each period
+# edit the df from stock's returns and crypto's returns - add the weights in for each period
 # remove the tbills
