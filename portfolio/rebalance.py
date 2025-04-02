@@ -373,15 +373,19 @@ def time_series_rebalance(
         portfolio_val *= (1 + realized_ret)
         portvals.append((next_date, portfolio_val))
     portvals_df = pd.DataFrame(portvals, columns=["Date", "PortfolioValue"]).set_index("Date")
-    portvals_df["DailyRet"] = portvals_df["PortfolioValue"].pct_change().fillna(0.0)
 
-    daily_ret = portvals_df["DailyRet"]
-    mean_ret = daily_ret.mean()
-    std_ret = daily_ret.std(ddof=1)
-    ann_sharpe = (mean_ret / std_ret * np.sqrt(252)) if std_ret > 1e-9 else 0.0
+    # Compute 2-minute interval returns (instead of daily returns)
+    portvals_df["IntervalRet"] = portvals_df["PortfolioValue"].pct_change().fillna(0.0)
+
+    interval_ret = portvals_df["IntervalRet"]
+    mean_ret = interval_ret.mean()
+    std_ret = interval_ret.std(ddof=1)
+    # Annualization factor for 2-minute intervals: 195 intervals per day * 252 days per year
+    ann_sharpe = (mean_ret / std_ret * np.sqrt(195 * 252)) if std_ret > 1e-9 else 0.0
+
     running_max = portvals_df["PortfolioValue"].cummax()
     max_drawdown = (portvals_df["PortfolioValue"] / running_max - 1).min()
-    win_rate = (daily_ret > 0).sum() / (daily_ret != 0).sum()
+    win_rate = (interval_ret > 0).sum() / (interval_ret != 0).sum()
 
     print("\n=== Final Portfolio Stats ===")
     print(f"Method                : {method}")
