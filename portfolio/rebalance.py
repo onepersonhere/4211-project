@@ -77,7 +77,7 @@ def compute_portfolio_performance(weights, mu, cov, rf=0.0):
     return vol, ret, sharpe
 
 
-def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=1000, spline_kind='cubic'):
+def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_kind='cubic'):
     fig, ax = plt.subplots()
 
     # Compute GMV portfolio
@@ -345,8 +345,8 @@ if __name__ == "__main__":
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
-        rebalance_days=7,  # Change to any number of days for a different interval
-        lookback=252,
+        rebalance_days=14,  # Change to any number of days for a different interval
+        lookback=64,
         margin=0.25,
         target_return=0.8
     )
@@ -355,3 +355,10 @@ if __name__ == "__main__":
     for period_end, (portvals_df, weights_dict) in daily_results.items():
         print(f"\n--- Results for period ending on {period_end.date()} ---")
         print(portvals_df.tail(1))
+
+
+
+# rebalancing -> get max return portfolio (regardless of tangent)
+# calculate sharpe ratio, draw down etc.
+# duplicate the df from stock's returns and crypto's returns (add the weight in) for each period
+# remove the tbills
