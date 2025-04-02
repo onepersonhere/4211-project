@@ -13,7 +13,7 @@ def to_milliseconds(date_str):
 
 # Get validation period data
 start_time_utc = datetime(2025, 3, 1, 0, 1, 0, tzinfo=timezone.utc)
-end_time_utc = datetime(2025, 3, 29, 0, 0, 0, tzinfo=timezone.utc)
+end_time_utc = datetime(2025, 3, 31, 23, 59, 0, tzinfo=timezone.utc)
 
 # Convert to milliseconds, replacing with UTC timezone
 start_time = to_milliseconds(start_time_utc.strftime("%Y-%m-%d %H:%M:%S"))
