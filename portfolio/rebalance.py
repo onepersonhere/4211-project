@@ -200,7 +200,7 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
     stock_df = load_asset_returns(stock_csv, freq="2min")
     stock_df = stock_df.loc[(stock_df.index >= start_date) & (stock_df.index <= end_date)]
     asset_df = crypto_df.join(stock_df, how="inner")
-    asset_df.dropna(axis=1, how="all", inplace=True)
+    asset_df.dropna(how="any", inplace=True)
     if asset_df.empty:
         print("No overlapping data.")
         return pd.DataFrame(), {}
