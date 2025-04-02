@@ -12,6 +12,11 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 # --- Helper functions ---
 
 def get_tbill_data(start, end):
+    """
+    Download 13-week T-bill data (^IRX) from Yahoo Finance,
+    compute the annual and daily risk-free rate, and return
+    a DataFrame with columns ["Rate", "Daily_Rf"].
+    """
     tbill = yf.download("^IRX", start=start, end=end, progress=False, auto_adjust=False)
     tbill.reset_index(inplace=True)
     if isinstance(tbill.columns, pd.MultiIndex):
@@ -23,38 +28,35 @@ def get_tbill_data(start, end):
 
 
 def load_asset_returns(csv_path, freq="2min"):
+    """
+    Load a CSV with columns ["Date","Ticker","Strategy_Return"] and pivot it so that
+    each Ticker is a column. Then resample to the specified frequency.
+    """
     df = pd.read_csv(csv_path, parse_dates=["Date"])
     df.sort_values("Date", inplace=True)
-    pivoted = df.pivot(index="Date", columns="Ticker", values="Actual_Return")
+    pivoted = df.pivot(index="Date", columns="Ticker", values="Strategy_Return")
     pivoted = pivoted.resample(freq).last()
     return pivoted
 
 
 def mean_cov_matrix(returns_df):
+    """
+    Compute the mean vector and covariance matrix from the provided returns DataFrame.
+    """
     mu = returns_df.mean()
     cov = returns_df.cov()
     return mu, cov
 
 
-def find_tangency_portfolio(mu, cov, rf, max_exposure):
-    n = len(mu)
-    init_w = np.ones(n) / n
-
-    def negative_sharpe(w):
-        ret = np.dot(w, mu)
-        vol = np.sqrt(w @ cov @ w)
-        return -(ret - rf) / (vol if vol > 1e-9 else 1e-9)
-
-    cons = [
-        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
-        {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))}
-    ]
-    bounds = [(-10, 10)] * n
-    res = minimize(negative_sharpe, init_w, method="SLSQP", constraints=cons, bounds=bounds)
-    return res.x
-
+# --- Portfolio optimization routines ---
 
 def find_global_min_variance(cov, max_exposure):
+    """
+    Solve for the Global Minimum Variance (GMV) portfolio:
+        minimize w' * cov * w
+        s.t. sum(w) = 1
+             sum(abs(w)) <= max_exposure
+    """
     n = cov.shape[0]
     init_w = np.ones(n) / n
 
@@ -70,19 +72,110 @@ def find_global_min_variance(cov, max_exposure):
     return res.x
 
 
+def find_tangency_portfolio(mu, cov, rf, max_exposure):
+    """
+    Solve for the Tangency (maximum Sharpe) portfolio:
+        maximize (w' * mu - rf) / sqrt(w' * cov * w)
+        s.t. sum(w) = 1
+             sum(abs(w)) <= max_exposure
+    """
+    n = len(mu)
+    init_w = np.ones(n) / n
+
+    def negative_sharpe(w):
+        ret = np.dot(w, mu)
+        vol = np.sqrt(w @ cov @ w)
+        return -(ret - rf) / max(vol, 1e-9)
+
+    cons = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))}
+    ]
+    bounds = [(-10, 10)] * n
+    res = minimize(negative_sharpe, init_w, method="SLSQP", constraints=cons, bounds=bounds)
+    return res.x
+
+
+def find_min_variance_for_return(mu, cov, target_return, max_exposure):
+    """
+    Solve for portfolio with minimum variance subject to a target return:
+        minimize w' * cov * w
+        s.t. sum(w) = 1,
+             w' * mu >= target_return,
+             sum(abs(w)) <= max_exposure
+    """
+    n = len(mu)
+    init_w = np.ones(n) / n
+
+    def portfolio_var(w):
+        return w @ cov @ w
+
+    cons = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        {"type": "ineq", "fun": lambda w: np.dot(w, mu) - target_return},
+        {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))}
+    ]
+    bounds = [(-10, 10)] * n
+    res = minimize(portfolio_var, init_w, method="SLSQP", constraints=cons, bounds=bounds)
+    return res.x
+
+
+def find_max_return_for_variance(mu, cov, target_variance, max_exposure):
+    """
+    Solve for portfolio with maximum return subject to a target variance:
+        maximize w' * mu
+        s.t. sum(w) = 1,
+             w' * cov * w <= target_variance,
+             sum(abs(w)) <= max_exposure
+    """
+    n = len(mu)
+    init_w = np.ones(n) / n
+
+    def negative_return(w):
+        return -np.dot(w, mu)
+
+    cons = [
+        {"type": "eq", "fun": lambda w: np.sum(w) - 1},
+        {"type": "ineq", "fun": lambda w: target_variance - (w @ cov @ w)},
+        {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))}
+    ]
+    bounds = [(-10, 10)] * n
+    res = minimize(negative_return, init_w, method="SLSQP", constraints=cons, bounds=bounds)
+    return res.x
+
+
+def find_max_return_for_volatility(mu, cov, target_vol, max_exposure):
+    """
+    Solve for portfolio with maximum return subject to a target volatility.
+    target_vol is provided as a volatility (e.g. 0.3) and is squared internally to obtain the target variance.
+    """
+    target_variance = target_vol ** 2
+    return find_max_return_for_variance(mu, cov, target_variance, max_exposure)
+
+
 def compute_portfolio_performance(weights, mu, cov, rf=0.0):
+    """
+    Compute portfolio volatility, return, and Sharpe ratio.
+    """
     ret = np.dot(weights, mu)
     vol = np.sqrt(weights @ cov @ weights)
-    sharpe = (ret - rf) / (vol if vol > 1e-9 else 1e-9)
+    sharpe = (ret - rf) / max(vol, 1e-9)
     return vol, ret, sharpe
 
 
 def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_kind='cubic'):
+    """
+    Plots an approximate efficient frontier (by scanning over possible returns),
+    the GMV portfolio, and the tangency portfolio. Also plots the Capital Market Line.
+    Returns the figure and axis for further overlay.
+    """
     fig, ax = plt.subplots()
 
     # Compute GMV portfolio
     w_gmv = find_global_min_variance(cov, max_exposure)
     vol_gmv, ret_gmv, _ = compute_portfolio_performance(w_gmv, mu, cov, 0.0)
+
+    # Scan from GMV return up to ~150% of max asset return
     r_min = ret_gmv
     r_max = max(mu) * 1.5
     r_vals = np.linspace(r_min, r_max, resolution)
@@ -95,7 +188,7 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_k
         cons = [
             {"type": "eq", "fun": lambda w: np.sum(w) - 1},
             {"type": "ineq", "fun": lambda w: max_exposure - np.sum(np.abs(w))},
-            {"type": "eq", "fun": lambda w: w @ mu - r_target}
+            {"type": "eq", "fun": lambda w: np.dot(w, mu) - r_target}
         ]
         w0 = np.ones(len(mu)) / len(mu)
         bounds = [(-10, 10)] * len(mu)
@@ -103,65 +196,61 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_k
         if res.success:
             vol_ = np.sqrt(res.x @ cov @ res.x)
             frontier_points.append((vol_, r_target))
+
     frontier_points = np.array(frontier_points)
     if frontier_points.size == 0:
         print("No feasible frontier points found under margin constraints.")
-        return None, None, None
+        return fig, ax
 
-    ax.scatter([vol_gmv], [ret_gmv], c="green", marker="o", s=100, label="GMV Portfolio")
+    ax.scatter([vol_gmv], [ret_gmv], marker="o", s=100, label="GMV Portfolio")
+
+    # Tangency portfolio
     w_tan = find_tangency_portfolio(mu, cov, rf, max_exposure)
     vol_tan, ret_tan, _ = compute_portfolio_performance(w_tan, mu, cov, rf)
-    ax.scatter([vol_tan], [ret_tan], c="red", marker="*", s=200, label="Tangency Portfolio")
+    ax.scatter([vol_tan], [ret_tan], marker="*", s=200, label="Tangency Portfolio")
 
-    min_vol = min(vol_gmv, vol_tan)
-    max_vol = max(vol_gmv, vol_tan)
-    subset = frontier_points[(frontier_points[:, 0] >= min_vol) & (frontier_points[:, 0] <= max_vol)]
-    gmvtup = (vol_gmv, ret_gmv)
-    tantup = (vol_tan, ret_tan)
-    sublist = subset.tolist()
-    if gmvtup not in sublist:
-        sublist.append(gmvtup)
-    if tantup not in sublist:
-        sublist.append(tantup)
-    subset = np.array(sublist)
-    subset = subset[subset[:, 0].argsort()]
-
-    # Remove duplicates on volatility
-    df_subset = pd.DataFrame(subset, columns=["Vol", "Ret"])
-    df_subset.drop_duplicates(subset=["Vol"], inplace=True)
-    subset = df_subset.to_numpy()
-
-    x = subset[:, 0]
-    y = subset[:, 1]
+    # Interpolate and plot the frontier
+    frontier_points = frontier_points[frontier_points[:, 0].argsort()]
+    df_front = pd.DataFrame(frontier_points, columns=["Vol", "Ret"])
+    df_front.drop_duplicates(subset=["Vol"], inplace=True)
+    df_front.sort_values("Vol", inplace=True)
+    x = df_front["Vol"].values
+    y = df_front["Ret"].values
     f = interp1d(x, y, kind=spline_kind)
-    x_fit = np.linspace(x[0], x[-1], 200)
+    x_fit = np.linspace(x[0], x[-1], 300)
     y_fit = f(x_fit)
-    ax.plot(x_fit, y_fit, 'b--', label="Interpolated Frontier")
+    ax.plot(x_fit, y_fit, '--', label="Frontier")
 
-    sharpe_tan = (ret_tan - rf) / (vol_tan if vol_tan > 1e-9 else 1e-9)
-    sigmas = np.linspace(0, vol_tan * 1.5, 100)
+    # Capital Market Line
+    sharpe_tan = (ret_tan - rf) / max(vol_tan, 1e-9)
+    sigmas = np.linspace(0, vol_tan * 1.5, 200)
     cml = rf + sharpe_tan * sigmas
-    ax.plot(sigmas, cml, 'k--', linewidth=2, label="Capital Market Line")
+    ax.plot(sigmas, cml, 'k--', linewidth=2, label="CML")
 
-    ax.set_xlabel("Volatility (Std Dev)")
+    ax.set_xlabel("Volatility")
     ax.set_ylabel("Return")
-    ax.set_title(f"Frontier, Spline={spline_kind}, R_f={rf:.2%}, MaxExposure={max_exposure}")
+    ax.set_title("Efficient Frontier")
     ax.legend()
-    plt.show()
-    return w_tan, vol_tan, ret_tan
+    return fig, ax
 
 
-def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
+# --- Parallel iteration processing ---
+
+def process_iteration(i, dates, combined, asset_df, lookback, max_exposure,
+                      method, use_tbills, target_return, target_vol):
     """
-    Process a single rebalancing iteration:
-      - Computes the tangency portfolio based on the rolling window.
-      - Calculates the realized return for the next period.
-    Returns a tuple:
-      (iteration index, current_date, next_date, w_tan, realized_return)
+    Process a single rebalancing iteration given a method:
+      - 'gmv'
+      - 'tangency'
+      - 'min_variance_for_return'
+      - 'max_return_for_volatility'
+    Returns a tuple: (i, current_date, next_date, weights, realized_return)
     """
     current_date = dates[i]
     next_date = dates[i + 1]
     window_dates = dates[i - lookback: i]
+
+    # Extract returns from lookback window
     window_returns = combined.loc[window_dates, asset_df.columns].dropna(axis=1, how="any")
     if window_returns.empty:
         return (i, current_date, next_date, None, None)
@@ -169,32 +258,70 @@ def process_iteration(i, dates, combined, asset_df, lookback, max_exposure):
     # Compute raw mean and covariance from 2-minute returns
     mu_raw, cov_raw = mean_cov_matrix(window_returns)
 
-    # Annualize: assume 195 two-minute intervals per day and 252 trading days per year
+    # Annualize: assume 195 intervals per day and 252 trading days per year
     intervals_per_day = 195
     annualization_factor = intervals_per_day * 252
     mu_ann = mu_raw * annualization_factor
     cov_ann = cov_raw * annualization_factor
 
-    # Use the annual T-bill rate (not the daily rate)
-    rf_annual = combined.loc[current_date, "Rate"]
+    # Set risk-free rate based on T-bill data if used
+    if use_tbills and "Rate" in combined.columns:
+        rf_annual = combined.loc[current_date, "Rate"]
+    else:
+        rf_annual = 0.0
 
-    # Find tangency portfolio using annualized parameters
-    w_tan = find_tangency_portfolio(mu_ann, cov_ann, rf_annual, max_exposure)
+    # Choose optimization method
+    if method == "gmv":
+        w = find_global_min_variance(cov_ann, max_exposure)
+    elif method == "tangency":
+        w = find_tangency_portfolio(mu_ann, cov_ann, rf_annual, max_exposure)
+    elif method == "min_variance_for_return":
+        if target_return is None:
+            raise ValueError("Provide target_return for 'min_variance_for_return'.")
+        w = find_min_variance_for_return(mu_ann, cov_ann, target_return, max_exposure)
+    elif method == "max_return_for_volatility":
+        if target_vol is None:
+            raise ValueError("Provide target_vol for 'max_return_for_volatility'.")
+        w = find_max_return_for_volatility(mu_ann, cov_ann, target_vol, max_exposure)
+    else:
+        raise ValueError(f"Unknown method: {method}")
 
-    # Get next period's actual 2-minute returns (not annualized)
+    # Get next period's realized returns
     window_cols = window_returns.columns
     r_next = combined.loc[next_date, window_cols].fillna(0.0)
-    realized_ret = np.dot(w_tan, r_next)
-    return (i, current_date, next_date, w_tan, realized_ret)
+    realized_ret = np.dot(w, r_next)
+    return (i, current_date, next_date, w, realized_ret)
 
 
 # --- Modified time_series_rebalance ---
-# Now accepts optional start_date and end_date parameters.
-def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=60, margin=0.25,
-                          target_return=None):
+
+def time_series_rebalance(
+    crypto_csv,
+    stock_csv,
+    start_date,
+    end_date,
+    lookback=60,
+    margin=0.25,
+    method="tangency",
+    use_tbills=True,
+    target_return=None,
+    target_vol=None
+):
+    """
+    Perform rolling-window rebalancing on 2-minute returns data from crypto_csv and stock_csv
+    between start_date and end_date. The 'method' can be:
+      - 'gmv'
+      - 'tangency'
+      - 'min_variance_for_return'
+      - 'max_return_for_volatility'
+    For 'min_variance_for_return', set target_return.
+    For 'max_return_for_volatility', set target_vol.
+    If use_tbills is True, T-bill data is used for rf; otherwise rf=0.
+    Returns a DataFrame of portfolio values over time and a dictionary of weights.
+    """
     max_exposure = 1 / margin
 
-    # Load and resample asset returns
+    # 1) Load and align asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
     crypto_df = crypto_df.loc[(crypto_df.index >= start_date) & (crypto_df.index <= end_date)]
     stock_df = load_asset_returns(stock_csv, freq="2min")
@@ -205,59 +332,69 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
         print("No overlapping data.")
         return pd.DataFrame(), {}
 
-    # Load T-bill data and align to 2-minute timestamps
-    tbill_df = get_tbill_data(start_date, end_date)
-    tbill_df = tbill_df.reindex(asset_df.index, method="ffill")
-    combined = asset_df.join(tbill_df, how="inner")
+    # 2) Load T-bill data if required
+    if use_tbills:
+        tbill_df = get_tbill_data(start_date, end_date)
+        tbill_df = tbill_df.reindex(asset_df.index, method="ffill")
+        combined = asset_df.join(tbill_df, how="inner")
+    else:
+        combined = asset_df.copy()
+        if "Rate" not in combined.columns:
+            combined["Rate"] = 0.0
     dates = combined.index
     if len(dates) < lookback + 1:
         print("Not enough data for the chosen lookback.")
         return pd.DataFrame(), {}
 
-    # --- Parallel processing of each iteration ---
+    # 3) Run rebalancing iterations in parallel
     results = []
     iterations = range(lookback, len(dates) - 1)
     with ProcessPoolExecutor() as executor:
         futures = {
-            executor.submit(process_iteration, i, dates, combined, asset_df, lookback, max_exposure): i
-            for i in iterations
+            executor.submit(
+                process_iteration,
+                i, dates, combined, asset_df, lookback, max_exposure,
+                method, use_tbills, target_return, target_vol
+            ): i for i in iterations
         }
-        for future in tqdm(as_completed(futures), total=len(futures),
-                           desc="Processing iterations", unit="iteration"):
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing iterations", unit="iter"):
             result = future.result()
             results.append(result)
-
-    # Filter and sort valid iterations
     results = [r for r in results if r[3] is not None]
     results.sort(key=lambda x: x[0])
 
-    # Sequentially update portfolio value using the realized returns
+    # 4) Build portfolio value series
     portfolio_val = 1.0
     portvals = []
     weights_dict = {}
     portvals.append((dates[lookback], portfolio_val))
-    for i, current_date, next_date, w_tan, realized_ret in results:
-        weights_dict[current_date] = w_tan
+    for i, current_date, next_date, w, realized_ret in results:
+        weights_dict[current_date] = w
         portfolio_val *= (1 + realized_ret)
         portvals.append((next_date, portfolio_val))
-
     portvals_df = pd.DataFrame(portvals, columns=["Date", "PortfolioValue"]).set_index("Date")
-    portvals_df["DailyRet"] = portvals_df["PortfolioValue"].pct_change().fillna(0.0)
-    daily_ret = portvals_df["DailyRet"]
-    mean_ret = daily_ret.mean()
-    std_ret = daily_ret.std(ddof=1)
-    ann_sharpe = (mean_ret / std_ret * np.sqrt(252)) if std_ret > 1e-9 else 0.0
+
+    # Compute 2-minute interval returns (instead of daily returns)
+    portvals_df["IntervalRet"] = portvals_df["PortfolioValue"].pct_change().fillna(0.0)
+
+    interval_ret = portvals_df["IntervalRet"]
+    mean_ret = interval_ret.mean()
+    std_ret = interval_ret.std(ddof=1)
+    # Annualization factor for 2-minute intervals: 195 intervals per day * 252 days per year
+    ann_sharpe = (mean_ret / std_ret * np.sqrt(195 * 252)) if std_ret > 1e-9 else 0.0
+
     running_max = portvals_df["PortfolioValue"].cummax()
     max_drawdown = (portvals_df["PortfolioValue"] / running_max - 1).min()
-    win_rate = (daily_ret > 0).sum() / (daily_ret != 0).sum()
+    win_rate = (interval_ret > 0).sum() / (interval_ret != 0).sum()
 
-    print("=== Final Portfolio Stats ===")
-    print(f"Final Portfolio Value   : {portvals_df.iloc[-1]['PortfolioValue']:.4f}")
-    print(f"Annualized Sharpe Ratio : {ann_sharpe:.4f}")
-    print(f"Max Drawdown            : {max_drawdown:.2%}")
-    print(f"Win Rate                : {win_rate:.2%}")
+    print("\n=== Final Portfolio Stats ===")
+    print(f"Method                : {method}")
+    print(f"Final Portfolio Value : {portvals_df.iloc[-1]['PortfolioValue']:.4f}")
+    print(f"Annualized Sharpe     : {ann_sharpe:.4f}")
+    print(f"Max Drawdown          : {max_drawdown:.2%}")
+    print(f"Win Rate              : {win_rate:.2%}")
 
-    # Plot the efficient frontier at the final rebalancing point using annualized returns
+    # 5) Plot the efficient frontier and overlay the chosen portfolio at the final rebalancing
     if weights_dict:
         final_rebal_date = list(weights_dict.keys())[-1]
         window_dates = dates[dates <= final_rebal_date][-lookback:]
@@ -268,41 +405,66 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
             annualization_factor = intervals_per_day * 252
             mu_final = mu_final_raw * annualization_factor
             cov_final = cov_final_raw * annualization_factor
-            rf_annual = combined.loc[final_rebal_date, "Rate"]
-            w_tan_final, vol_tan, ret_tan = plot_efficient_frontier(
-                mu_final, cov_final, rf_annual, max_exposure, resolution=1000
-            )
+            rf_final = combined.loc[final_rebal_date, "Rate"] if use_tbills else 0.0
+
+            # Plot the frontier
+            fig, ax = plot_efficient_frontier(mu_final, cov_final, rf_final, max_exposure, resolution=500)
+
+            # Compute and plot the final chosen portfolio
+            if method == "gmv":
+                w_chosen = find_global_min_variance(cov_final, max_exposure)
+            elif method == "tangency":
+                w_chosen = find_tangency_portfolio(mu_final, cov_final, rf_final, max_exposure)
+            elif method == "min_variance_for_return":
+                if target_return is None:
+                    raise ValueError("Provide target_return for 'min_variance_for_return'.")
+                w_chosen = find_min_variance_for_return(mu_final, cov_final, target_return, max_exposure)
+            elif method == "max_return_for_volatility":
+                if target_vol is None:
+                    raise ValueError("Provide target_vol for 'max_return_for_volatility'.")
+                w_chosen = find_max_return_for_volatility(mu_final, cov_final, target_vol, max_exposure)
+            else:
+                w_chosen = None
+
+            if w_chosen is not None:
+                vol_chosen, ret_chosen, _ = compute_portfolio_performance(w_chosen, mu_final, cov_final, rf_final)
+                ax.scatter([vol_chosen], [ret_chosen], marker="X", s=200, label="Chosen Portfolio")
+                ax.legend()
+                plt.show()
+                print("\n=== Final Chosen Portfolio Weights ===")
+                final_assets = window_returns.columns.tolist()
+                for asset_name, wght in zip(final_assets, w_chosen):
+                    print(f"{asset_name}: {wght:.4f}")
+            else:
+                print("No chosen portfolio was computed.")
         else:
-            print("Not enough data for efficient frontier plot at final rebalancing.")
+            print("Not enough data for efficient frontier plot at the final rebalancing window.")
     else:
         print("No rebalancing steps performed.")
-        return portvals_df, weights_dict
-
-    if target_return is None:
-        target_return = rf_annual + 0.5 * (ret_tan - rf_annual)
-    x = 0.0 if abs(ret_tan - rf_annual) < 1e-9 else (target_return - rf_annual) / (ret_tan - rf_annual)
-
-    print(f"\nTarget Overall Annual Return: {target_return:.2%}")
-    print(f"Fraction in Risky Assets (x): {x:.4f}")
-    print(f"Fraction in T-bills (1-x): {1 - x:.4f}")
-    print("\nComplete Portfolio Weights (Risky Assets weighted by x):")
-    for asset, w in zip(mu_final.index, w_tan_final):
-        print(f"  {asset}: {x * w:.4f}")
-    print("T-bills Weight: {:.4f}".format(1 - x))
 
     return portvals_df, weights_dict
 
 
 # --- General periodic rebalancing function ---
-def periodic_rebalance(crypto_csv, stock_csv, rebalance_days=1, lookback=60, margin=0.25, target_return=None):
-    """
-    General rebalancing function that splits the data into segments of a specified number of days.
-    For each segment, time_series_rebalance is run using the segment start and end dates.
 
-    Parameters:
-      rebalance_days: Number of calendar days between rebalancing endpoints.
+def periodic_rebalance(
+    crypto_csv,
+    stock_csv,
+    rebalance_days=1,
+    lookback=60,
+    margin=0.25,
+    method="tangency",
+    use_tbills=True,
+    target_return=None,
+    target_vol=None
+):
     """
-    # Load asset returns once to determine overall date range.
+    Splits the overall data into segments of 'rebalance_days' and runs
+    time_series_rebalance on each segment.
+    For 'min_variance_for_return', set target_return.
+    For 'max_return_for_volatility', set target_vol.
+    Returns a dictionary keyed by period end date.
+    """
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
     stock_df = load_asset_returns(stock_csv, freq="2min")
     asset_df = crypto_df.join(stock_df, how="inner")
@@ -313,8 +475,6 @@ def periodic_rebalance(crypto_csv, stock_csv, rebalance_days=1, lookback=60, mar
 
     overall_start = asset_df.index.min()
     overall_end = asset_df.index.max()
-
-    # Determine period endpoints using a resample rule (e.g., '1D' for daily, '7D' for weekly)
     period_endpoints = asset_df.resample(f'{rebalance_days}D').last().index
 
     results = {}
@@ -322,40 +482,46 @@ def periodic_rebalance(crypto_csv, stock_csv, rebalance_days=1, lookback=60, mar
     for endpoint in period_endpoints:
         if endpoint <= segment_start:
             continue
-        print(f"Running rebalancing for period: {segment_start} to {endpoint}")
+        print(f"\nRebalancing from {segment_start} to {endpoint} | Method: {method}")
         portvals_df, weights_dict = time_series_rebalance(
-            crypto_csv, stock_csv,
+            crypto_csv,
+            stock_csv,
+            start_date=segment_start,
+            end_date=endpoint,
             lookback=lookback,
             margin=margin,
+            method=method,
+            use_tbills=use_tbills,
             target_return=target_return,
-            start_date=segment_start,
-            end_date=endpoint
+            target_vol=target_vol
         )
         results[endpoint] = (portvals_df, weights_dict)
-        # Update segment_start to the current endpoint for the next iteration.
         segment_start = endpoint
     return results
 
 
-# --- Main block ---
+# --- Example usage (if run directly) ---
 if __name__ == "__main__":
     crypto_csv_path = "../crypto/returns.csv"
     stock_csv_path = "../stock/returns.csv"
 
+    # Example: Rebalance every 14 days, look back 64 intervals, 25% margin.
+    # Using the 'max_return_for_volatility' method with a target volatility.
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
-        rebalance_days=14,  # Change to any number of days for a different interval
-        lookback=64,
+        rebalance_days=7,      # every 14 days
+        lookback=128,
         margin=0.25,
-        target_return=0.8
+        method="max_return_for_volatility",  # new method using target volatility
+        use_tbills=False,       # ignore T-bill data => rf=0 for tangency
+        target_return=None,     # not used for this method
+        target_vol=0.5          # set target volatility (e.g. 0.3)
     )
 
-    # Process the results: here we print the final portfolio value for each segment.
     for period_end, (portvals_df, weights_dict) in daily_results.items():
         print(f"\n--- Results for period ending on {period_end.date()} ---")
         print(portvals_df.tail(1))
-
 
 
 # rebalancing -> get max return portfolio (regardless of tangent)
