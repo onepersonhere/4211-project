@@ -196,7 +196,9 @@ def time_series_rebalance(crypto_csv, stock_csv, start_date, end_date, lookback=
 
     # Load and resample asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
+    crypto_df = crypto_df.loc[(crypto_df.index >= start_date) & (crypto_df.index <= end_date)]
     stock_df = load_asset_returns(stock_csv, freq="2min")
+    stock_df = stock_df.loc[(stock_df.index >= start_date) & (stock_df.index <= end_date)]
     asset_df = crypto_df.join(stock_df, how="inner")
     asset_df.dropna(axis=1, how="all", inplace=True)
     if asset_df.empty:
@@ -337,14 +339,14 @@ def periodic_rebalance(crypto_csv, stock_csv, rebalance_days=1, lookback=60, mar
 
 # --- Main block ---
 if __name__ == "__main__":
-    crypto_csv_path = "../crypto/copy/returns.csv"
+    crypto_csv_path = "../crypto/returns.csv"
     stock_csv_path = "../stock/returns.csv"
 
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
         rebalance_days=7,  # Change to any number of days for a different interval
-        lookback=64,
+        lookback=252,
         margin=0.25,
         target_return=0.8
     )
