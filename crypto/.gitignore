@@ -3,7 +3,7 @@
 .DS_Store
 
 # Ignore all CSV files 
-copy/data_with_indicators/*.csv
+data_with_indicators/*.csv
+data_raw/*.csv
 
-copy/data_raw/
 
