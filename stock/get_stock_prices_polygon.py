@@ -16,7 +16,7 @@ API_KEYS = [
 ]
 
 START_DATE = datetime.strptime("2025-01-01", "%Y-%m-%d")
-END_DATE = datetime.today() - timedelta(days=1)
+END_DATE = datetime.strptime("2025-03-31", "%Y-%m-%d")
 CHUNK_DAYS = 30
 MAX_ROWS = 50000
 SAVE_PATH = "./stock/data_raw"
