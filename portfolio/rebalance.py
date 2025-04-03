@@ -502,20 +502,20 @@ def periodic_rebalance(
 
 
 if __name__ == "__main__":
-    crypto_csv_path = "../crypto/returns.csv"
-    stock_csv_path = "../stock/returns.csv"
+    crypto_csv_path = "./crypto/returns.csv"
+    stock_csv_path = "./stock/returns.csv"
 
     # Rebalance every 7 days, look back 64 intervals, 25% margin.
     daily_results = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
         rebalance_days=7,
-        lookback=128,
+        lookback=200,
         margin=0.25,
         method="max_return_for_volatility",
         use_tbills=False,
         target_return=None,
-        target_vol=0.5
+        target_vol=0.4
     )
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
