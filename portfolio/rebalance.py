@@ -515,7 +515,7 @@ if __name__ == "__main__":
         method="max_return_for_volatility",
         use_tbills=False,
         target_return=None,
-        target_vol=0.4
+        target_vol=0.3
     )
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
@@ -570,8 +570,3 @@ if __name__ == "__main__":
     update_csv_with_weights(crypto_csv_path, "crypto_csv_with_weights.csv", weights_series)
     update_csv_with_weights(stock_csv_path, "stock_csv_with_weights.csv", weights_series)
 
-
-# rebalancing -> get max return portfolio (regardless of tangent)
-# calculate sharpe ratio, draw down etc.
-# edit the df from stock's returns and crypto's returns - add the weights in for each period
-# remove the tbills
