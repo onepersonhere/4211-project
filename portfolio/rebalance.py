@@ -443,7 +443,12 @@ def time_series_rebalance(
     else:
         print("No rebalancing steps performed.")
 
-    return portvals_df, weights_dict
+    return portvals_df, weights_dict, {
+        "Final_Portfolio_Value": portvals_df.iloc[-1]["PortfolioValue"],
+        "Annualized_Sharpe": ann_sharpe,
+        "Max_Drawdown": max_drawdown,
+        "Win_Rate": win_rate
+    }
 
 
 # --- General periodic rebalancing function ---
@@ -479,12 +484,13 @@ def periodic_rebalance(
     period_endpoints = asset_df.resample(f'{rebalance_days}D').last().index
 
     results = {}
+    stats_list = []
     segment_start = overall_start
     for endpoint in period_endpoints:
         if endpoint <= segment_start:
             continue
         print(f"\nRebalancing from {segment_start} to {endpoint} | Method: {method}")
-        portvals_df, weights_dict = time_series_rebalance(
+        portvals_df, weights_dict, stats = time_series_rebalance(
             crypto_csv,
             stock_csv,
             start_date=segment_start,
@@ -497,8 +503,11 @@ def periodic_rebalance(
             target_vol=target_vol
         )
         results[endpoint] = (portvals_df, weights_dict)
+        stats["Period_End"] = endpoint
+        stats["Method"] = method
+        stats_list.append(stats)
         segment_start = endpoint
-    return results
+    return results, stats_list
 
 
 if __name__ == "__main__":
@@ -506,7 +515,7 @@ if __name__ == "__main__":
     stock_csv_path = "./stock/returns.csv"
 
     # Rebalance every 7 days, look back 64 intervals, 25% margin.
-    daily_results = periodic_rebalance(
+    daily_results, stats_list = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
         rebalance_days=7,
@@ -517,6 +526,11 @@ if __name__ == "__main__":
         target_return=None,
         target_vol=0.4
     )
+
+    # ✅ Save weekly stats to CSV
+    stats_df = pd.DataFrame(stats_list)
+    stats_df.to_csv("./portfolio/weekly_portfolio_stats.csv", index=False)
+    print("✅ Saved weekly stats to weekly_portfolio_stats.csv")
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
         print(f"\n--- Results for period ending on {period_end.date()} ---")
@@ -567,6 +581,6 @@ if __name__ == "__main__":
 
         df.to_csv(output_path, index=False)
 
-    update_csv_with_weights(crypto_csv_path, "crypto_csv_with_weights.csv", weights_series)
-    update_csv_with_weights(stock_csv_path, "stock_csv_with_weights.csv", weights_series)
+    update_csv_with_weights(crypto_csv_path, "./portfolio/crypto_csv_with_weights.csv", weights_series)
+    update_csv_with_weights(stock_csv_path, "./portfolio/stock_csv_with_weights.csv", weights_series)
 

@@ -126,8 +126,6 @@ if __name__ == "__main__":
 
     resample_intervals = {
         "2minute": "2min",
-        "5minute": "5min",
-        "15minute": "15min"
     }
 
     for name, freq in resample_intervals.items():
