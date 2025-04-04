@@ -515,7 +515,7 @@ if __name__ == "__main__":
         method="max_return_for_volatility",
         use_tbills=False,
         target_return=None,
-        target_vol=0.3
+        target_vol=0.4
     )
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
