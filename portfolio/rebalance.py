@@ -431,7 +431,7 @@ def time_series_rebalance(
                 vol_chosen, ret_chosen, _ = compute_portfolio_performance(w_chosen, mu_final, cov_final, rf_final)
                 ax.scatter([vol_chosen], [ret_chosen], marker="X", s=200, label="Chosen Portfolio")
                 ax.legend()
-                plt.show()
+                # plt.show()
                 print("\n=== Final Chosen Portfolio Weights ===")
                 final_assets = window_returns.columns.tolist()
                 for asset_name, wght in zip(final_assets, w_chosen):
@@ -524,7 +524,7 @@ if __name__ == "__main__":
         method="max_return_for_volatility",
         use_tbills=False,
         target_return=None,
-        target_vol=0.4
+        target_vol=0.35
     )
 
     # ✅ Save weekly stats to CSV
