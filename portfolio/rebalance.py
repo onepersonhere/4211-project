@@ -1,5 +1,4 @@
 import pandas as pd
-import datetime
 import yfinance as yf
 import numpy as np
 import matplotlib.pyplot as plt
@@ -8,15 +7,8 @@ from scipy.interpolate import interp1d
 from tqdm import tqdm
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
-
-# --- Helper functions ---
-
+# T-bill data (^IRX) from Yahoo Finance
 def get_tbill_data(start, end):
-    """
-    Download 13-week T-bill data (^IRX) from Yahoo Finance,
-    compute the annual and daily risk-free rate, and return
-    a DataFrame with columns ["Rate", "Daily_Rf"].
-    """
     tbill = yf.download("^IRX", start=start, end=end, progress=False, auto_adjust=False)
     tbill.reset_index(inplace=True)
     if isinstance(tbill.columns, pd.MultiIndex):
@@ -38,21 +30,15 @@ def load_asset_returns(csv_path, freq="2min"):
     pivoted = pivoted.resample(freq).last()
     return pivoted
 
-
+# Compute the mean vector and covariance matrix from the provided returns DataFrame.
 def mean_cov_matrix(returns_df):
-    """
-    Compute the mean vector and covariance matrix from the provided returns DataFrame.
-    """
     mu = returns_df.mean()
     cov = returns_df.cov()
     return mu, cov
 
-
-# --- Portfolio optimization routines ---
-
 def find_global_min_variance(cov, max_exposure):
     """
-    Solve for the Global Minimum Variance (GMV) portfolio:
+    Global Minimum Variance (GMV) portfolio:
         minimize w' * cov * w
         s.t. sum(w) = 1
              sum(abs(w)) <= max_exposure
@@ -74,7 +60,7 @@ def find_global_min_variance(cov, max_exposure):
 
 def find_tangency_portfolio(mu, cov, rf, max_exposure):
     """
-    Solve for the Tangency (maximum Sharpe) portfolio:
+    Tangency (maximum Sharpe) portfolio:
         maximize (w' * mu - rf) / sqrt(w' * cov * w)
         s.t. sum(w) = 1
              sum(abs(w)) <= max_exposure
@@ -154,9 +140,6 @@ def find_max_return_for_volatility(mu, cov, target_vol, max_exposure):
 
 
 def compute_portfolio_performance(weights, mu, cov, rf=0.0):
-    """
-    Compute portfolio volatility, return, and Sharpe ratio.
-    """
     ret = np.dot(weights, mu)
     vol = np.sqrt(weights @ cov @ weights)
     sharpe = (ret - rf) / max(vol, 1e-9)
@@ -164,11 +147,6 @@ def compute_portfolio_performance(weights, mu, cov, rf=0.0):
 
 
 def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_kind='cubic'):
-    """
-    Plots an approximate efficient frontier (by scanning over possible returns),
-    the GMV portfolio, and the tangency portfolio. Also plots the Capital Market Line.
-    Returns the figure and axis for further overlay.
-    """
     fig, ax = plt.subplots()
 
     # Compute GMV portfolio
@@ -234,8 +212,7 @@ def plot_efficient_frontier(mu, cov, rf, max_exposure, resolution=2000, spline_k
     return fig, ax
 
 
-# --- Parallel iteration processing ---
-
+# This is a helper function to process each iteration in parallel.
 def process_iteration(i, dates, combined, asset_df, lookback, max_exposure,
                       method, use_tbills, target_return, target_vol):
     """
@@ -292,9 +269,6 @@ def process_iteration(i, dates, combined, asset_df, lookback, max_exposure,
     realized_ret = np.dot(w, r_next)
     return (i, current_date, next_date, w, realized_ret)
 
-
-# --- Modified time_series_rebalance ---
-
 def time_series_rebalance(
     crypto_csv,
     stock_csv,
@@ -321,7 +295,7 @@ def time_series_rebalance(
     """
     max_exposure = 1 / margin
 
-    # 1) Load and align asset returns
+    # Load and align asset returns
     crypto_df = load_asset_returns(crypto_csv, freq="2min")
     crypto_df = crypto_df.loc[(crypto_df.index >= start_date) & (crypto_df.index <= end_date)]
     stock_df = load_asset_returns(stock_csv, freq="2min")
@@ -332,7 +306,7 @@ def time_series_rebalance(
         print("No overlapping data.")
         return pd.DataFrame(), {}
 
-    # 2) Load T-bill data if required
+    # Load T-bill data if required
     if use_tbills:
         tbill_df = get_tbill_data(start_date, end_date)
         tbill_df = tbill_df.reindex(asset_df.index, method="ffill")
@@ -346,7 +320,7 @@ def time_series_rebalance(
         print("Not enough data for the chosen lookback.")
         return pd.DataFrame(), {}
 
-    # 3) Run rebalancing iterations in parallel
+    # Run rebalancing iterations in parallel
     results = []
     iterations = range(lookback, len(dates) - 1)
     with ProcessPoolExecutor() as executor:
@@ -363,7 +337,7 @@ def time_series_rebalance(
     results = [r for r in results if r[3] is not None]
     results.sort(key=lambda x: x[0])
 
-    # 4) Build portfolio value series
+    # Build portfolio value series
     portfolio_val = 1.0
     portvals = []
     weights_dict = {}
@@ -395,7 +369,7 @@ def time_series_rebalance(
     print(f"Max Drawdown          : {max_drawdown:.2%}")
     print(f"Win Rate              : {win_rate:.2%}")
 
-    # 5) Plot the efficient frontier and overlay the chosen portfolio at the final rebalancing
+    # Plot the efficient frontier and overlay the chosen portfolio at the final rebalancing
     if weights_dict:
         final_rebal_date = list(weights_dict.keys())[-1]
         window_dates = dates[dates <= final_rebal_date][-lookback:]
@@ -450,9 +424,7 @@ def time_series_rebalance(
         "Win_Rate": win_rate
     }
 
-
-# --- General periodic rebalancing function ---
-
+# Wrapper function to run the rebalancing process over multiple periods.
 def periodic_rebalance(
     crypto_csv,
     stock_csv,
@@ -480,7 +452,6 @@ def periodic_rebalance(
         return {}
 
     overall_start = asset_df.index.min()
-    overall_end = asset_df.index.max()
     period_endpoints = asset_df.resample(f'{rebalance_days}D').last().index
 
     results = {}
@@ -527,10 +498,10 @@ if __name__ == "__main__":
         target_vol=0.4
     )
 
-    # ✅ Save weekly stats to CSV
+    # Save weekly stats to CSV
     stats_df = pd.DataFrame(stats_list)
     stats_df.to_csv("./portfolio/weekly_portfolio_stats.csv", index=False)
-    print("✅ Saved weekly stats to weekly_portfolio_stats.csv")
+    print("Saved weekly stats to weekly_portfolio_stats.csv")
 
     for period_end, (portvals_df, weights_dict) in daily_results.items():
         print(f"\n--- Results for period ending on {period_end.date()} ---")
@@ -545,17 +516,15 @@ if __name__ == "__main__":
     all_weights = []
     for period, (portvals_df, weights_dict) in daily_results.items():
         for date, w in weights_dict.items():
-            # Convert the numpy array into a dictionary using the universal asset_names order.
             w_dict = dict(zip(asset_names, w))
             all_weights.append((date, w_dict))
 
     weights_df = pd.DataFrame(all_weights, columns=["RebalanceDate", "WeightDict"])
     weights_df.sort_values("RebalanceDate", inplace=True)
-    # Create a Series with index = RebalanceDate and value = the weight dictionary.
+
     weights_series = weights_df.set_index("RebalanceDate")["WeightDict"]
 
     def update_csv_with_weights(csv_path, output_path, weights_series):
-        # Load the original CSV file.
         df = pd.read_csv(csv_path, parse_dates=["Date"])
         df.sort_values("Date", inplace=True)
 
@@ -571,12 +540,10 @@ if __name__ == "__main__":
         def extract_weight(row):
             if pd.isna(row["WeightDict"]):
                 return np.nan
-            # Return the weight for the ticker; if missing, np.nan.
             return row["WeightDict"].get(row["Ticker"], np.nan)
 
         df["Weight"] = df.apply(extract_weight, axis=1)
 
-        # Optionally drop helper columns.
         df.drop(columns=["RebalanceDate", "WeightDict"], inplace=True)
 
         df.to_csv(output_path, index=False)
