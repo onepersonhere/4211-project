@@ -514,17 +514,17 @@ if __name__ == "__main__":
     crypto_csv_path = "./crypto/returns.csv"
     stock_csv_path = "./stock/returns.csv"
 
-    # Rebalance every 7 days, look back 64 intervals, 25% margin.
+    # Rebalance every 7 days, look back 150 intervals, 25% margin.
     daily_results, stats_list = periodic_rebalance(
         crypto_csv_path,
         stock_csv_path,
         rebalance_days=7,
-        lookback=200,
+        lookback=150,
         margin=0.25,
         method="max_return_for_volatility",
         use_tbills=False,
         target_return=None,
-        target_vol=0.35
+        target_vol=0.4
     )
 
     # ✅ Save weekly stats to CSV
